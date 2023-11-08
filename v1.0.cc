@@ -771,8 +771,12 @@ namespace HP_ALE
             {
                 GridIn<2> gridin;
                 gridin.attach_triangulation(triangulation);
-                std::ifstream f("/home/lexlee/Downloads/triangleversion/case2.msh");
-                //std::ifstream f("/home/lexlee/Downloads/v1.0debug/simplemesh.msh");
+                #ifdef USE_TRIANGLE
+                    std::ifstream f("/home/lexlee/Downloads/triangleversion/case2_tri.msh");
+                #else
+                    std::ifstream f("/home/lexlee/Downloads/triangleversion/case2_quad.msh");
+                #endif
+
                 gridin.read_msh(f);
 
                 // set material id:
