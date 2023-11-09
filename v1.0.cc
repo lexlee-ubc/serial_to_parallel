@@ -772,7 +772,8 @@ namespace HP_ALE
                 GridIn<2> gridin;
                 gridin.attach_triangulation(triangulation);
                 #ifdef USE_TRIANGLE
-                    std::ifstream f("/home/lexlee/Downloads/triangleversion/case2_tri.msh");
+                    //std::ifstream f("/home/lexlee/Downloads/triangleversion/case2_tri.msh");
+                    std::ifstream f("/home/lexlee/Downloads/triangleversion/case2.msh");
                 #else
                     std::ifstream f("/home/lexlee/Downloads/triangleversion/case2_quad.msh");
                 #endif
@@ -1064,11 +1065,11 @@ namespace HP_ALE
             AssertThrow(false, ExcNotImplemented());
         }
 
-        /* hmin =
+         hmin =
       GridTools::minimal_cell_diameter(triangulation) / std::sqrt(1. * dim);
       const double hmax =
       GridTools::maximal_cell_diameter(triangulation) / std::sqrt(1. * dim);
-    pcout << " hmin = " << hmin << " hmax = " << hmax << std::endl;*/
+    pcout << " hmin = " << hmin << " hmax = " << hmax << std::endl;
     }
 
     template <int dim>
@@ -2547,11 +2548,23 @@ namespace HP_ALE
     FluidStructureProblem<dim>::setup_hp_sparse_matrix(const IndexSet &hp_index_set,
                                                        const IndexSet &hp_relevant_set)
     {
-        //DynamicSparsityPattern dsp(hp_relevant_set);
+
         Table<2, DoFTools::Coupling> cell_coupling, face_coupling;
         const bool print_coupling_pattern = false;
         make_coupling(cell_coupling, face_coupling, print_coupling_pattern);
 
+#ifdef USE_TRIANGLE
+        DynamicSparsityPattern dsp(hp_relevant_set);
+        DoFTools::make_flux_sparsity_pattern(dof_handler,
+                                     dsp,
+                                     cell_coupling,
+                                     face_coupling,
+                                     Utilities::MPI::this_mpi_process(
+                                             MPI_COMM_WORLD));
+        constraints_newton_update.condense(dsp);
+        sparsity_pattern.copy_from(dsp);
+        system_matrix.reinit(sparsity_pattern);
+#else
         TrilinosWrappers::SparsityPattern dsp(hp_index_set,
                                              hp_index_set,
                                              hp_relevant_set,
@@ -2566,30 +2579,8 @@ namespace HP_ALE
                                              Utilities::MPI::this_mpi_process(
                                                 MPI_COMM_WORLD));
         dsp.compress();
-       //sparsity_pattern.copy_from(dsp);
-        system_matrix.reinit(dsp);  // 892794
-        /*system_matrix.reinit(hp_index_set,
-                             sparsity_pattern,
-                             mpi_communicator);*/ // 893288
-        //condense, dofs 901310
-       /*system_matrix.reinit(hp_index_set,
-                             sparsity_pattern,
-                             mpi_communicator);*/ 
-
-        /*DoFTools::make_flux_sparsity_pattern(dof_handler,
-                                             dsp,
-                                             cell_coupling,
-                                             face_coupling,
-                                             Utilities::MPI::this_mpi_process(
-                                                     MPI_COMM_WORLD));*/
-        /*constraints_newton_update.condense(dsp);
-
-        sparsity_pattern.copy_from(dsp);*/
-        /*system_matrix.reinit(hp_index_set,
-                             sparsity_pattern,
-                             MPI_COMM_WORLD);*/
-        //system_matrix.reinit(sparsity_pattern);
-
+        system_matrix.reinit(dsp);
+#endif
     }
 
 //no need to modify
@@ -2734,8 +2725,9 @@ namespace HP_ALE
             if (cell->is_locally_owned())
             {
                 if (cell_is_in_fluid_domain(cell))
-                    for (unsigned int f = 0; f < GeometryInfo<dim>::faces_per_cell;
-                         ++f) // f : face #
+                    /*for (unsigned int f = 0; f < GeometryInfo<dim>::faces_per_cell;
+                         ++f) // f : face #*/
+                    for (const auto &f : cell->face_indices())
                         if (!cell->at_boundary(f))
                         {
                             bool face_is_on_interface = false;
@@ -3585,7 +3577,8 @@ namespace HP_ALE
 
 
             // currently only works for uniform mesh;
-            for (unsigned int f : GeometryInfo<dim>::face_indices())
+            //for (unsigned int f : GeometryInfo<dim>::face_indices())
+            for (const auto &f : cell_hp->face_indices())
                 if (!cell_hp->at_boundary(f))
                     if (cell_is_in_fluid_domain(cell_hp->neighbor(f)))
                     {
@@ -3993,7 +3986,7 @@ namespace HP_ALE
 
         system_matrix.compress(VectorOperation::add);
         system_rhs.compress(VectorOperation::add);
-        pcout << "Number of non-zero elements: " << system_matrix.n_nonzero_elements() << std::endl;
+        //pcout << "Number of non-zero elements: " << system_matrix.n_nonzero_elements() << std::endl;
     }
 
 //change this later for parallel computing
@@ -4285,7 +4278,7 @@ namespace HP_ALE
         make_grid(n_refinement);
         setup_dofs();
         set_interface_dofs_flag(interface_dofs_flag);
-        //output_results(0);
+        output_results(0);
 
         uint         step       = 0;
         double       time       = 0.;
