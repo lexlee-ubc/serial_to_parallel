@@ -1,4 +1,4 @@
-#define USE_TRIANGLE
+#include <deal.II/base/function.h>
 #include <deal.II/grid/reference_cell.h>
 #include <deal.II/lac/matrix_out.h>
 #include <deal.II/base/quadrature_lib.h>
@@ -45,6 +45,7 @@
 #include <deal.II/base/conditional_ostream.h>
 #include <deal.II/base/index_set.h>
 #include <deal.II/distributed/tria.h>
+#include <deal.II/distributed/shared_tria.h>
 #include <deal.II/numerics/matrix_tools.h>
 #include <deal.II/numerics/solution_transfer.h>
 #include <deal.II/lac/generic_linear_algebra.h>
@@ -70,25 +71,6 @@
 #include <locale>
 #include <deal.II/distributed/solution_transfer.h>
 #include <deal.II/distributed/grid_refinement.h>
-#include <deal.II/base/function.h>
-#include <deal.II/base/table.h>
-#include <deal.II/base/utilities.h>
-#include <deal.II/fe/fe_simplex_p.h>
-#include <deal.II/fe/mapping_fe.h>
-#include <deal.II/fe/mapping_fe_field.h>
-#include <deal.II/grid/tria_accessor.h>
-#include <deal.II/grid/grid_tools_cache.h>
-#include <deal.II/hp/fe_values.h>
-#include <deal.II/meshworker/mesh_loop.h>
-#include <deal.II/gmsh/utilities.h>
-#include <deal.II/opencascade/manifold_lib.h>
-#include <deal.II/opencascade/utilities.h>
-#include <Standard_Stream.hxx>
-#include <TopTools.hxx>
-#include <TopoDS_Shape.hxx>
-#include <cmath>
-#include <cstdio>
-#include <cstdlib>
 
 namespace HP_ALE
 {
@@ -161,6 +143,10 @@ namespace HP_ALE
                            const bool                    print_pattern = false);
         void
         set_interface_dofs_flag(std::vector<unsigned int> &flag);
+        /*void
+        set_interface_dofs_flag(TrilinosWrappers::MPI::Vector &flag,
+                                const IndexSet &hp_index_set);*/
+
         void
         make_boundary_constraints_hp(const IndexSet &hp_relevant_set);
 
@@ -185,7 +171,7 @@ namespace HP_ALE
         void
         make_flux_constraints(AffineConstraints<double> &constraints_flux);
 
-        void newton_iteration();
+        void newton_iteration(const IndexSet &hp_index_set);
         void output_results(const unsigned int refinement_cycle) const;
         void update_constraints(const IndexSet &hp_relevant_set);
 
@@ -194,26 +180,25 @@ namespace HP_ALE
         const unsigned int volume_degree;
 
         MPI_Comm     mpi_communicator;
-        //parallel::distributed::Triangulation<dim> triangulation;
-        Triangulation<dim> triangulation;
+        parallel::distributed::Triangulation<dim> triangulation;
+        //parallel::shared::Triangulation<dim> triangulation;
+           //Triangulation<dim> triangulation;
+
 
         FESystem<dim>      stokes_fe;
         FESystem<dim>      hydrogel_fe;
-#ifdef USE_TRIANGLE
-        FE_SimplexP<dim> volume_fe;
-#else
         FE_Q<dim>          volume_fe; // volume fraction phi_s
-#endif
+
         hp::FECollection<dim> fe_collection;
         DoFHandler<dim>       dof_handler;
 
         hp::FECollection<dim> volume_fe_collection;
         DoFHandler<dim>       volume_dof_handler;
 
-        IndexSet volume_locally_owned_dofs;
-        IndexSet volume_locally_relevant_dofs;
-        IndexSet hp_index_set;
-        IndexSet hp_relevant_set;
+         IndexSet volume_locally_owned_dofs;
+         IndexSet volume_locally_relevant_dofs;
+         IndexSet hp_index_set;
+         IndexSet hp_relevant_set;
 
         AffineConstraints<double> constraints_hp_nonzero; // for fe system
         AffineConstraints<double> constraints_hp; // flux constraints + nonzero
@@ -227,6 +212,7 @@ namespace HP_ALE
 
         //SparsityPattern      sparsity_pattern;
         TrilinosWrappers::SparseMatrix system_matrix;
+        SparseMatrix<double> matrix1;
 
         //SparsityPattern      volume_sparsity_pattern;
         TrilinosWrappers::SparseMatrix volume_system_matrix;
@@ -248,14 +234,15 @@ namespace HP_ALE
         TrilinosWrappers::MPI::Vector volume_system_rhs;
         TrilinosWrappers::MPI::Vector dis_volume_solution;
         TrilinosWrappers::MPI::Vector dis_volume_old_solution;
-#ifdef USE_TRIANGLE
-        std::unique_ptr<MappingFE<dim>> mapping_pointer;
-#else
+
         std::unique_ptr<MappingQ<dim>> mapping_pointer;
-#endif
         hp::MappingCollection<dim>     mapping_collection;
 
         std::vector<unsigned int> interface_dofs_flag;
+
+
+
+        bool rebuild_matrix;
 
         const double viscosity;
         const double vis_BM; // viscousity inside hydrogel
@@ -443,11 +430,9 @@ namespace HP_ALE
         local_assemble_hp(
                 const typename DoFHandler<dim>::active_cell_iterator &cell,
                 ScratchData &                                         scratch,
-                PerTaskData &                                         copy_data,
-                const bool update_matrix = true);
+                PerTaskData &                                         copy_data);
         void
-        copy_local_to_global_hp(const PerTaskData &copy_data,
-                                const bool         update_matrix = true);
+        copy_local_to_global_hp(const PerTaskData &copy_data);
         void
         local_assemble_volume(
                 const typename DoFHandler<dim>::active_cell_iterator &cell,
@@ -457,7 +442,7 @@ namespace HP_ALE
         copy_local_to_global_volume(const PerTaskData &copy_data);
 
         void
-        assemble_system_workstream(const bool update_matrix = true);
+        assemble_system_workstream(const IndexSet &hp_index_set);
         void
         assemble_volume_system_workstream();
         void
@@ -470,21 +455,6 @@ namespace HP_ALE
             const unsigned int velocity_degree,
             const unsigned int pressure_degree)
     {
-#ifdef USE_TRIANGLE
-        std::vector<const FiniteElement<dim> *> fe_list;
-        fe_list.push_back(
-                new FE_SimplexP<dim>(velocity_degree)); //(dim) displacement
-        fe_list.push_back(new FE_SimplexP<dim>(
-                velocity_degree)); //(dim) mesh velocity (solid velocity)
-        fe_list.push_back(new FE_SimplexP<dim>(
-                velocity_degree)); //(dim) hydrogel fluid velocity v_f
-        fe_list.push_back(
-                new FE_SimplexP<dim>(pressure_degree)); //(1)   hydrogel pressure
-        fe_list.push_back(new FE_Nothing<dim>(
-                ReferenceCells::Triangle)); //(dim) outer fluid velocity V
-        fe_list.push_back(
-                new FE_Nothing<dim>(ReferenceCells::Triangle)); //(1)   pressure P
-#else
         std::vector<const FiniteElement<dim> *> fe_list;
         fe_list.push_back(new FE_Q<dim>(velocity_degree)); //(dim) displacement
         fe_list.push_back(
@@ -494,7 +464,6 @@ namespace HP_ALE
         fe_list.push_back(new FE_Q<dim>(pressure_degree)); //(1)   hydrogel pressure
         fe_list.push_back(new FE_Nothing<dim>()); //(dim) outer fluid velocity V
         fe_list.push_back(new FE_Nothing<dim>()); //(1)   pressure P
-#endif
         return fe_list;
     }
 
@@ -504,20 +473,6 @@ namespace HP_ALE
             const unsigned int velocity_degree,
             const unsigned int pressure_degree)
     {
-#ifdef USE_TRIANGLE
-        std::vector<const FiniteElement<dim> *> fe_list;
-        fe_list.push_back(
-                new FE_SimplexP<dim>(velocity_degree)); //(dim) displacement
-        fe_list.push_back(new FE_Nothing<dim>(
-                ReferenceCells::Triangle)); //(dim) mesh velocity (solid velocity)
-        fe_list.push_back(new FE_Nothing<dim>(
-                ReferenceCells::Triangle)); //(dim) hydrogel fluid velocity v_f
-        fe_list.push_back(
-                new FE_Nothing<dim>(ReferenceCells::Triangle)); //(1)   hydrogel pressure
-        fe_list.push_back(
-                new FE_SimplexP<dim>(velocity_degree)); //(dim) outer fluid velocity V_f
-        fe_list.push_back(new FE_SimplexP<dim>(pressure_degree)); //(1)   pressure P
-#else
         std::vector<const FiniteElement<dim> *> fe_list;
         fe_list.push_back(new FE_Q<dim>(velocity_degree)); //(dim) displacement
         fe_list.push_back(
@@ -528,8 +483,6 @@ namespace HP_ALE
         fe_list.push_back(
                 new FE_Q<dim>(velocity_degree)); //(dim) outer fluid velocity V_f
         fe_list.push_back(new FE_Q<dim>(pressure_degree)); //(1)   pressure P
-#endif
-
         return fe_list;
     }
 
@@ -559,13 +512,11 @@ namespace HP_ALE
             , pressure_degree(pressure_degree)
             , volume_degree(volume_degree)
             , mpi_communicator(MPI_COMM_WORLD)
-           /*, triangulation(mpi_communicator,
+            , triangulation(mpi_communicator,
                             typename Triangulation<dim>::MeshSmoothing(
                                     Triangulation<dim>::smoothing_on_refinement |
-                                    Triangulation<dim>::smoothing_on_coarsening))*/
-            , triangulation(typename Triangulation<dim>::MeshSmoothing(
-                                    Triangulation<dim>::smoothing_on_refinement |
                                     Triangulation<dim>::smoothing_on_coarsening))
+
             , stokes_fe(create_stokes_fe_list(velocity_degree, pressure_degree),
                         create_fe_multiplicities())
             , hydrogel_fe(create_hydrogel_fe_list(velocity_degree, pressure_degree),
@@ -602,11 +553,7 @@ namespace HP_ALE
         // 1: hydrogel domain
         fe_collection.push_back(stokes_fe);
         fe_collection.push_back(hydrogel_fe);
-#ifdef USE_TRIANGLE
-        volume_fe_collection.push_back(FE_Nothing<dim>(ReferenceCells::Triangle));
-#else
         volume_fe_collection.push_back(FE_Nothing<dim>());
-#endif
         volume_fe_collection.push_back(volume_fe);
         print_variables();
 
@@ -616,91 +563,56 @@ namespace HP_ALE
             {
                 const bool         use_on_all_cells = true;
                 const unsigned int mapping_degree   = velocity_degree;
-#ifdef USE_TRIANGLE
-                mapping_pointer =
-                        std::make_unique<MappingFE<dim>>(FE_SimplexP<dim>(1));
-#else
                 mapping_pointer =
                         std::make_unique<MappingQ<dim>>(mapping_degree, use_on_all_cells);
-#endif
                 break;
             }
             case TestCase::case_2:
             {
                 const bool         use_on_all_cells = true;
                 const unsigned int mapping_degree   = velocity_degree;
-#ifdef USE_TRIANGLE
-                mapping_pointer =
-                        std::make_unique<MappingFE<dim>>(FE_SimplexP<dim>(1));
-#else
                 mapping_pointer =
                         std::make_unique<MappingQ<dim>>(mapping_degree, use_on_all_cells);
-#endif
                 break;
             }
             case TestCase::case_3:
             {
                 const bool         use_on_all_cells = true;
                 const unsigned int mapping_degree   = velocity_degree;
-#ifdef USE_TRIANGLE
-                mapping_pointer =
-                        std::make_unique<MappingFE<dim>>(FE_SimplexP<dim>(1));
-#else
                 mapping_pointer =
                         std::make_unique<MappingQ<dim>>(mapping_degree, use_on_all_cells);
-#endif
                 break;
             }
             case TestCase::case_4:
             {
                 const bool         use_on_all_cells = true;
                 const unsigned int mapping_degree   = velocity_degree;
-#ifdef USE_TRIANGLE
-                mapping_pointer =
-                        std::make_unique<MappingFE<dim>>(FE_SimplexP<dim>(1));
-#else
                 mapping_pointer =
                         std::make_unique<MappingQ<dim>>(mapping_degree, use_on_all_cells);
-#endif
                 break;
             }
             case TestCase::case_5:
             {
                 const bool         use_on_all_cells = true;
                 const unsigned int mapping_degree   = velocity_degree;
-#ifdef USE_TRIANGLE
-                mapping_pointer =
-                        std::make_unique<MappingFE<dim>>(FE_SimplexP<dim>(1));
-#else
                 mapping_pointer =
                         std::make_unique<MappingQ<dim>>(mapping_degree, use_on_all_cells);
-#endif
                 break;
             }
             case TestCase::case_6:
             {
                 const bool         use_on_all_cells = true;
                 const unsigned int mapping_degree   = velocity_degree;
-#ifdef USE_TRIANGLE
-                mapping_pointer =
-                        std::make_unique<MappingFE<dim>>(FE_SimplexP<dim>(1));
-#else
                 mapping_pointer =
                         std::make_unique<MappingQ<dim>>(mapping_degree, use_on_all_cells);
-#endif
                 break;
             }
             case TestCase::case_7:
             {
                 const bool         use_on_all_cells = true;
                 const unsigned int mapping_degree   = velocity_degree;
-#ifdef USE_TRIANGLE
-                mapping_pointer =
-                        std::make_unique<MappingFE<dim>>(FE_SimplexP<dim>(1));
-#else
                 mapping_pointer =
                         std::make_unique<MappingQ<dim>>(mapping_degree, use_on_all_cells);
-#endif
                 break;
             }
             default:
@@ -771,13 +683,8 @@ namespace HP_ALE
             {
                 GridIn<2> gridin;
                 gridin.attach_triangulation(triangulation);
-                #ifdef USE_TRIANGLE
-                    //std::ifstream f("/home/lexlee/Downloads/triangleversion/case2_tri.msh");
-                    std::ifstream f("/home/lexlee/Downloads/triangleversion/case2.msh");
-                #else
-                    std::ifstream f("/home/lexlee/Downloads/triangleversion/case2_quad.msh");
-                #endif
-
+                std::ifstream f("/home/lexlee/Downloads/v1.0debug/case22.msh");
+                //std::ifstream f("/home/lexlee/Downloads/v1.0debug/simplemesh.msh");
                 gridin.read_msh(f);
 
                 // set material id:
@@ -1065,11 +972,11 @@ namespace HP_ALE
             AssertThrow(false, ExcNotImplemented());
         }
 
-         hmin =
+        /* hmin =
       GridTools::minimal_cell_diameter(triangulation) / std::sqrt(1. * dim);
       const double hmax =
       GridTools::maximal_cell_diameter(triangulation) / std::sqrt(1. * dim);
-    pcout << " hmin = " << hmin << " hmax = " << hmax << std::endl;
+    pcout << " hmin = " << hmin << " hmax = " << hmax << std::endl;*/
     }
 
     template <int dim>
@@ -1099,6 +1006,7 @@ namespace HP_ALE
             }
         }
     }
+
 
     template <int dim>
     void
@@ -2335,9 +2243,9 @@ namespace HP_ALE
 
             volume_system_matrix.reinit(sp);
             volume_system_rhs.reinit(volume_locally_owned_dofs,
-                                     //volume_locally_relevant_dofs,
-                                     MPI_COMM_WORLD);
-                                     //false);
+                                     volume_locally_relevant_dofs,
+                                     MPI_COMM_WORLD,
+                                     true);
 
             //volume constraints
             volume_solution.reinit(volume_locally_relevant_dofs,
@@ -2386,12 +2294,18 @@ namespace HP_ALE
 
             const std::vector<types::global_dof_index> dofs_per_block =
                     DoFTools::count_dofs_per_fe_block(dof_handler, block_component);
-            const unsigned int n_displacement = dofs_per_block[0];
+           /* const unsigned int n_displacement = dofs_per_block[0];
             const unsigned int n_mesh_vel     = dofs_per_block[1];
             const unsigned int n_vf           = dofs_per_block[2];
             const unsigned int n_p_hydrogel   = dofs_per_block[3];
             const unsigned int n_V            = dofs_per_block[4];
-            const unsigned int n_P            = dofs_per_block[5];
+            const unsigned int n_P            = dofs_per_block[5];*/
+            const types::global_dof_index n_displacement = dofs_per_block[0];
+            const types::global_dof_index n_mesh_vel     = dofs_per_block[1];
+            const types::global_dof_index n_vf           = dofs_per_block[2];
+            const types::global_dof_index n_p_hydrogel   = dofs_per_block[3];
+            const types::global_dof_index n_V            = dofs_per_block[4];
+            const types::global_dof_index n_P            = dofs_per_block[5];
             // const unsigned int n_phi_s = volume_dof_handler.n_dofs();
 
             pcout << "   Number of active cells: "
@@ -2406,26 +2320,26 @@ namespace HP_ALE
             hp_index_set = dof_handler.locally_owned_dofs();
             hp_relevant_set = DoFTools::extract_locally_relevant_dofs(dof_handler);
 
-            /*solution.reinit(hp_relevant_set,
-                            MPI_COMM_WORLD);*/
-
-            solution.reinit(hp_index_set,
-                            hp_relevant_set,
+            solution.reinit(hp_relevant_set,
                             MPI_COMM_WORLD);
+
+            /*solution.reinit(hp_index_set,
+                            hp_relevant_set,
+                            MPI_COMM_WORLD);*/
             old_solution.reinit(solution);
             current_solution.reinit(solution);
             newton_update.reinit(solution);
 
-            system_rhs.reinit(hp_index_set,
-                              MPI_COMM_WORLD);
-
             /*system_rhs.reinit(hp_index_set,
-                   hp_relevant_set,
+                              MPI_COMM_WORLD);*/
+
+            system_rhs.reinit(hp_index_set,
+                              hp_relevant_set,
                               MPI_COMM_WORLD,
-                              true);*/
-            dis_solution.reinit(system_rhs);
-            /*dis_solution.reinit(hp_index_set,
-                                MPI_COMM_WORLD);*/
+                              true);
+            /*dis_solution.reinit(system_rhs);*/
+            dis_solution.reinit(hp_index_set,
+                                MPI_COMM_WORLD);
             dis_old_solution.reinit(dis_solution);
             dis_current_solution.reinit(dis_solution);
             dis_newton_update.reinit(dis_solution);
@@ -2553,19 +2467,7 @@ namespace HP_ALE
         const bool print_coupling_pattern = false;
         make_coupling(cell_coupling, face_coupling, print_coupling_pattern);
 
-#ifdef USE_TRIANGLE
-        DynamicSparsityPattern dsp(hp_relevant_set);
-        DoFTools::make_flux_sparsity_pattern(dof_handler,
-                                     dsp,
-                                     cell_coupling,
-                                     face_coupling,
-                                     Utilities::MPI::this_mpi_process(
-                                             MPI_COMM_WORLD));
-        constraints_newton_update.condense(dsp);
-        sparsity_pattern.copy_from(dsp);
-        system_matrix.reinit(sparsity_pattern);
-#else
-        TrilinosWrappers::SparsityPattern dsp(hp_index_set,
+        /*TrilinosWrappers::SparsityPattern dsp(hp_index_set,
                                              hp_index_set,
                                              hp_relevant_set,
                                              MPI_COMM_WORLD);
@@ -2579,8 +2481,49 @@ namespace HP_ALE
                                              Utilities::MPI::this_mpi_process(
                                                 MPI_COMM_WORLD));
         dsp.compress();
-        system_matrix.reinit(dsp);
-#endif
+        system_matrix.reinit(dsp);*/
+
+        DynamicSparsityPattern dsp(hp_relevant_set);
+        DoFTools::make_flux_sparsity_pattern(dof_handler,
+                                             dsp,
+                                             constraints_newton_update,
+                                             true,
+                                             cell_coupling,
+                                             face_coupling,
+                                             Utilities::MPI::this_mpi_process(
+                                                     MPI_COMM_WORLD));
+        SparsityTools::distribute_sparsity_pattern(dsp,
+                                                   hp_index_set,
+                                                   MPI_COMM_WORLD,
+                                                   hp_relevant_set);
+        system_matrix.reinit(hp_index_set,
+                             hp_index_set,
+                             dsp,
+                             MPI_COMM_WORLD,
+                             true);
+
+        /*DynamicSparsityPattern dsp(hp_relevant_set);
+        DoFTools::make_flux_sparsity_pattern(dof_handler,
+                                             dsp,
+                                             cell_coupling,
+                                             face_coupling);
+        constraints_newton_update.condense(dsp);
+
+        DoFTools::make_sparsity_pattern(dof_handler,
+                                        dsp,
+                                        constraints_newton_update,
+                                        false);
+        sparsity_pattern.copy_from(dsp);
+
+        matrix1.reinit(sparsity_pattern);
+
+        system_matrix.reinit(hp_index_set,
+                             hp_index_set,
+                             matrix1,
+                             MPI_COMM_WORLD,
+                             1e-13,
+                             true);*/
+
     }
 
 //no need to modify
@@ -2594,17 +2537,11 @@ namespace HP_ALE
         std::vector<Point<dim>> return_vals(unit_face_points.size());
         Quadrature<dim - 1>     tmp_q(unit_face_points);
         std::vector<Point<dim>> tmp_p(tmp_q.size());
-#ifdef USE_TRIANGLE
-        QProjector<dim>::project_to_face(ReferenceCells::Triangle,
-                                         tmp_q,
-                                         face_no,
-                                         tmp_p);
-#else
+
         QProjector<dim>::project_to_face(ReferenceCells::Quadrilateral,
                                          tmp_q,
                                          face_no,
                                          tmp_p);
-#endif
         for (unsigned int i = 0; i < unit_face_points.size(); ++i)
         {
             return_vals[i] =
@@ -2641,16 +2578,14 @@ namespace HP_ALE
                         coeff * normal[comp - starting_comp] / normal[line_comp];
                 col_vals_pair.emplace_back(cols[i], entry);
                 constrainted_flag[cols[i]] = true;
-#if 0
-                pcout << " constraint(" << row << "," << cols[i] << ")=" << entry
-                << std::endl;
-#endif
+
+                //pcout << " constraint(" << row << "," << cols[i] << ")=" << entry;
+
             }
         }
         constraints_flux.add_entries(row, col_vals_pair);
     }
 
-    //no need to modify
     template <int dim>
     void
     FluidStructureProblem<dim>::set_interface_dofs_flag(
@@ -2658,8 +2593,44 @@ namespace HP_ALE
     {
         flag.clear();
         flag.resize(dof_handler.n_locally_owned_dofs(), 1);
+        //flag.resize(dof_handler.n_locally_owned_dofs(), 0);
         const unsigned int hydrogel_dofs_per_cell = hydrogel_fe.dofs_per_cell;
+        const unsigned int stokes_dofs_per_cell = stokes_fe.dofs_per_cell;
         for (const auto &cell : dof_handler.active_cell_iterators())
+        {
+            if (cell->is_locally_owned())
+            {
+                if (cell_is_in_hydrogel_domain(cell))
+                {
+                    std::vector<types::global_dof_index> local_dof_indices(
+                            hydrogel_dofs_per_cell);
+                    cell->get_dof_indices(local_dof_indices);
+                    for (unsigned int i = 0; i < hydrogel_dofs_per_cell; ++i)
+                        flag[local_dof_indices[i]] = 0;
+                }
+
+            }
+        }
+    }
+
+    /*template <int dim>
+    void
+    FluidStructureProblem<dim>::set_interface_dofs_flag(
+        TrilinosWrappers::MPI::Vector &flag,
+        const IndexSet &hp_index_set
+        const IndexSet &hp_relevant_set)
+    {
+        flag.clear();
+        flag.reinit(hp_index_set, hp_relevant_set, MPI_COMM_WORLD, true);
+        flag = 1;
+
+        //flag.resize(dof_handler.n_locally_owned_dofs(), 1);
+        //const unsigned int hydrogel_dofs_per_cell = hydrogel_fe.dofs_per_cell;
+
+        for (const auto &cell : dof_handler.active_cell_iterators())
+        {
+            const unsigned int hydrogel_dofs_per_cell =
+                    cell->get_fe().dofs_per_cell;
             if (cell->is_locally_owned())
             {
                 if (cell_is_in_hydrogel_domain(cell))
@@ -2671,7 +2642,8 @@ namespace HP_ALE
                         flag[local_dof_indices[i]] = 0;
                 }
             }
-    }
+        }
+    }*/
 
     // This function uses volume_solution to compute the velocity constraint on
     // the hydrogel surface
@@ -2725,9 +2697,8 @@ namespace HP_ALE
             if (cell->is_locally_owned())
             {
                 if (cell_is_in_fluid_domain(cell))
-                    /*for (unsigned int f = 0; f < GeometryInfo<dim>::faces_per_cell;
-                         ++f) // f : face #*/
-                    for (const auto &f : cell->face_indices())
+                    for (unsigned int f = 0; f < GeometryInfo<dim>::faces_per_cell;
+                         ++f) // f : face #
                         if (!cell->at_boundary(f))
                         {
                             bool face_is_on_interface = false;
@@ -2932,7 +2903,7 @@ namespace HP_ALE
                                 } // q loop
                             }
                         }
-            }
+            }//if locally owned
 
     }
 
@@ -3076,20 +3047,11 @@ namespace HP_ALE
         volume_system_rhs    = 0;
         using CellFilter =
                 FilteredIterator<typename DoFHandler<2>::active_cell_iterator>;
-
-#ifdef USE_TRIANGLE
-        const QGaussSimplex<dim> quadrature_formula(2 + volume_degree);
-        // same quadrature for all
-        const hp::QCollection<dim>   q_collection{quadrature_formula,
-                                                  quadrature_formula};
-        const QGaussSimplex<dim - 1> face_quadrature_formula(2 + volume_degree);
-#else
         const QGauss<dim> quadrature_formula(2 + volume_degree);
         // same quadrature for all
         const hp::QCollection<dim> q_collection{quadrature_formula,
                                                 quadrature_formula};
         const QGauss<dim - 1>      face_quadrature_formula(2 + volume_degree);
-#endif
         const UpdateFlags          hp_update_flags =
                 update_values | update_gradients | update_quadrature_points;
         const UpdateFlags face_update_flags = update_values; // update_default
@@ -3147,10 +3109,6 @@ namespace HP_ALE
     FluidStructureProblem<dim>::solve_volume()
     {
         pcout << " solving volume..." << std::endl;
-        /*SolverControl                    solver_control;
-        TrilinosWrappers::SolverDirect::AdditionalData data(false, "Amesos_Mumps");
-        TrilinosWrappers::SolverDirect solver(solver_control, data);
-        solver.solve(volume_system_matrix, dis_volume_solution, volume_system_rhs);*/
         solver(volume_system_matrix, dis_volume_solution, volume_system_rhs);
         auto it_old = dis_volume_old_solution.begin();
         for (auto it = dis_volume_solution.begin(); it != dis_volume_solution.end();
@@ -3169,10 +3127,10 @@ namespace HP_ALE
     FluidStructureProblem<dim>::local_assemble_hp(
             const typename DoFHandler<dim>::active_cell_iterator &cell_hp,
             ScratchData &                                         scratch,
-            PerTaskData &                                         copy_data,
-            const bool                                            update_matrix)
+            PerTaskData &                                         copy_data)
     {
         copy_data.assemble_interface = false;
+
         scratch.hp_fe_values.reinit(cell_hp);
         typename DoFHandler<dim>::active_cell_iterator cell_volume(
                 &triangulation, cell_hp->level(), cell_hp->index(), &volume_dof_handler);
@@ -3193,6 +3151,7 @@ namespace HP_ALE
         copy_data.local_dof_indices.resize(dofs_per_cell);
         cell_hp->get_dof_indices(copy_data.local_dof_indices);
 
+        //const unsigned int hydrogel_dofs_per_cell = hydrogel_fe.dofs_per_cell;
         // declaring all test functions
         std::vector<Tensor<2, dim>> grad_shape_stokes_velocity(
                 stokes_dofs_per_cell); // \nabla psi_V
@@ -3228,7 +3187,6 @@ namespace HP_ALE
         {
             // pcout<<"assembling stokes domain..."<<std::endl;
             Assert(dofs_per_cell == stokes_dofs_per_cell, ExcInternalError());
-
             // grad u(gradients of mesh displacement)
             std::vector<Tensor<2, dim>> grad_u(n_q_points); // \nabla u
             fe_values[extractor_displacement].get_function_gradients(
@@ -3284,6 +3242,7 @@ namespace HP_ALE
 
                 for (unsigned int i = 0; i < dofs_per_cell; ++i)
                 {
+                    //interface_dofs_flag[copy_data.local_dof_indices[i]] = 1;
                     // Sigma^star F_hat_inv_transpose_star J_hat_star
                     tmp_rhs = 0.;
                     tmp_rhs +=
@@ -3297,9 +3256,11 @@ namespace HP_ALE
                                            grad_shape_stokes_velocity[i]) + // A_4
 
                             jacobian * scalar_product(inv_F_T, grad_vq) *
-                            shape_stokes_pressure[i] + // A_6
-
-                            alpha *
+                            shape_stokes_pressure[i]  + // A_6
+                           /* alpha *
+                            scalar_product(grad_u[q],
+                                            grad_shape_displacement[i]);*/
+                             alpha *
                             scalar_product(grad_u[q],
                                            grad_shape_displacement[i]) *
                             static_cast<double>(
@@ -3312,8 +3273,10 @@ namespace HP_ALE
 
                 // assemble local matrix
 
-                if (update_matrix)
+                if (rebuild_matrix == true)
                     for (unsigned int i = 0; i < dofs_per_cell; ++i)
+                    {
+                       // interface_dofs_flag[copy_data.local_dof_indices[i]] = 1;
                         for (unsigned int j = 0; j < dofs_per_cell; ++j)
                         {
                             tmp_mat = 0.;
@@ -3332,19 +3295,25 @@ namespace HP_ALE
 
                                     jacobian *
                                     scalar_product(inv_F_T, grad_shape_stokes_velocity[j]) *
-                                    shape_stokes_pressure[i] + // A'_6
+                                    shape_stokes_pressure[i]  + // A'_6
 
-                                    alpha *
+                                   /* alpha *
                                     scalar_product(grad_shape_displacement[j],
-                                                   grad_shape_displacement[i]) *
-                                    static_cast<double>(
-                                            interface_dofs_flag
-                                            [copy_data.local_dof_indices[i]]); // A'_13
+                                    grad_shape_displacement[i]) ;*/
+
+                             alpha *
+                            scalar_product(grad_shape_displacement[j],
+                                           grad_shape_displacement[i]) *
+                            static_cast<double>(
+                                    interface_dofs_flag
+                                    [copy_data.local_dof_indices[i]]); // A'_13
 
                             // add all the other terms here using the same format
                             // no need to change this
                             copy_data.cell_matrix(i, j) += fe_values.JxW(q) * tmp_mat;
                         } // dofs loop
+                    }
+
             }         // q loop
         } // outer domain (fluid domain)
 
@@ -3506,7 +3475,7 @@ namespace HP_ALE
 
                 // assemble local matrix
 
-                if (update_matrix)
+                if (rebuild_matrix == true)
                     for (unsigned int i = 0; i < dofs_per_cell; ++i)
                         for (unsigned int j = 0; j < dofs_per_cell; ++j)
                         {
@@ -3577,8 +3546,7 @@ namespace HP_ALE
 
 
             // currently only works for uniform mesh;
-            //for (unsigned int f : GeometryInfo<dim>::face_indices())
-            for (const auto &f : cell_hp->face_indices())
+            for (unsigned int f : GeometryInfo<dim>::face_indices())
                 if (!cell_hp->at_boundary(f))
                     if (cell_is_in_fluid_domain(cell_hp->neighbor(f)))
                     {
@@ -3738,7 +3706,7 @@ namespace HP_ALE
                                             term10(stokes_velocity_face[q],
                                                    shape_stokes_velocity_face[i]);
 
-                                    if (update_matrix)
+                                    if (rebuild_matrix == true)
                                         for (unsigned int j = 0; j < stokes_dofs_per_cell;
                                              ++j)
                                         {
@@ -3759,7 +3727,7 @@ namespace HP_ALE
                                                   -shape_vf_face[i]) +
                                             term10(stokes_velocity_face[q],
                                                    -shape_vf_face[i]);
-                                    if (update_matrix)
+                                    if (rebuild_matrix == true)
                                         for (unsigned int j = 0; j < stokes_dofs_per_cell;
                                              ++j)
                                         {
@@ -3779,7 +3747,7 @@ namespace HP_ALE
                                                   shape_stokes_velocity_face[i]) +
                                             term10(-vf_face[q],
                                                    shape_stokes_velocity_face[i]);
-                                    if (update_matrix)
+                                    if (rebuild_matrix == true)
                                         for (unsigned int j = 0;
                                              j < hydrogel_dofs_per_cell;
                                              ++j)
@@ -3803,7 +3771,7 @@ namespace HP_ALE
                                                    shape_vf_face[i] - shape_vs_face[i]); //+
                                     //                      term14(grad_u_face[q],
                                     //                      shape_u_face[i]);
-                                    if (update_matrix)
+                                    if (rebuild_matrix == true)
                                         for (unsigned int j = 0;
                                              j < hydrogel_dofs_per_cell;
                                              ++j)
@@ -3834,11 +3802,10 @@ namespace HP_ALE
     template <int dim>
     void
     FluidStructureProblem<dim>::copy_local_to_global_hp(
-            const PerTaskData &copy_data,
-            const bool         update_matrix)
+            const PerTaskData &copy_data)
     {
         //pcout << " copier " << std::endl;
-        if (update_matrix)
+        if (rebuild_matrix == true)
         {
             constraints_newton_update.distribute_local_to_global(
                     copy_data.cell_matrix,
@@ -3922,29 +3889,22 @@ namespace HP_ALE
     //no need to modify
     template <int dim>
     void
-    FluidStructureProblem<dim>::assemble_system_workstream(
-            const bool update_matrix)
+    FluidStructureProblem<dim>::assemble_system_workstream(const IndexSet &hp_index_set)
     {
-        if (update_matrix)
+        if (rebuild_matrix == true)
             system_matrix = 0;
 
         system_rhs = 0;
 
         using CellFilter =
                 FilteredIterator<typename DoFHandler<2>::active_cell_iterator>;
-#ifdef USE_TRIANGLE
-        const QGaussSimplex<dim> quadrature_formula(2 + velocity_degree);
-        // same quadrature for all
-        const hp::QCollection<dim>   q_collection{quadrature_formula,
-                                                  quadrature_formula};
-        const QGaussSimplex<dim - 1> face_quadrature_formula(2 + velocity_degree);
-#else
-         const QGauss<dim> quadrature_formula(2 + 2 * velocity_degree);
+
+
+        const QGauss<dim> quadrature_formula(2 + 2 * velocity_degree);
         // same quadrature for all
         const hp::QCollection<dim> q_collection{quadrature_formula,
                                                 quadrature_formula};
         const QGauss<dim - 1>      face_quadrature_formula(2 + 2 * velocity_degree);
-#endif
         const UpdateFlags hp_update_flags = update_values | update_gradients |
                                             update_JxW_values |
                                             update_quadrature_points;
@@ -3967,15 +3927,27 @@ namespace HP_ALE
                        hp_update_flags,
                        volume_update_flag,
                        face_update_flags);
+
         PerTaskData cp;
-        auto worker =
-                [=, &update_matrix = std::as_const(update_matrix)](const typename DoFHandler<dim>::active_cell_iterator &cell,
+
+        /*auto worker =
+                [this, &update_matrix = std::as_const(update_matrix)](const typename DoFHandler<dim>::active_cell_iterator &cell,
                                                                       ScratchData &                                         scratch,
                                                                       PerTaskData &                                         copy_data) {
-                    local_assemble_hp(cell, scratch, copy_data, update_matrix);
+                    this->local_assemble_hp(cell, scratch, copy_data, update_matrix);
                 };
-        auto copier = [=, &update_matrix = std::as_const(update_matrix)](const PerTaskData &copy_data) {
-            copy_local_to_global_hp(copy_data, update_matrix);
+        auto copier = [this, &update_matrix = std::as_const(update_matrix)](const PerTaskData &copy_data) {
+            this->copy_local_to_global_hp(copy_data, update_matrix);
+        };*/
+
+        auto worker =
+                [this](const typename DoFHandler<dim>::active_cell_iterator &cell,
+                                                                      ScratchData &                                         scratch,
+                                                                      PerTaskData &                                         copy_data) {
+                    this->local_assemble_hp(cell, scratch, copy_data);
+                };
+        auto copier = [this](const PerTaskData &copy_data) {
+            this->copy_local_to_global_hp(copy_data);
         };
 
         WorkStream::run(CellFilter(IteratorFilters::LocallyOwnedCell(),
@@ -3983,16 +3955,23 @@ namespace HP_ALE
                         CellFilter(IteratorFilters::LocallyOwnedCell(),
                                    dof_handler.end()),
                         worker, copier, sd, cp);
+        if (rebuild_matrix == true)
+        {
+            system_matrix.compress(VectorOperation::add);
+        }
 
-        system_matrix.compress(VectorOperation::add);
         system_rhs.compress(VectorOperation::add);
+
+        rebuild_matrix = false;
+
         //pcout << "Number of non-zero elements: " << system_matrix.n_nonzero_elements() << std::endl;
+
     }
 
 //change this later for parallel computing
     template <int dim>
     void
-    FluidStructureProblem<dim>::newton_iteration()
+    FluidStructureProblem<dim>::newton_iteration(const IndexSet &hp_index_set)
     {
         pcout << " newton iteration... " << std::endl;
         // set the Newton iterate v* to v_n
@@ -4006,7 +3985,9 @@ namespace HP_ALE
         unsigned int       iteration     = 0;
         const double       tol           = 1e-8;
         const double       alpha_min     = 0.01;
-        assemble_system_workstream(false);
+        rebuild_matrix = false;
+        assemble_system_workstream(hp_index_set);
+        //assemble_system_workstream(false);
         double residual_hp = system_rhs.l2_norm();
 
         double g1,g2,g3,g0,g_final; // the l2 norm for the rhs u_k
@@ -4014,18 +3995,28 @@ namespace HP_ALE
         double h1, h2, h3;
 
         pcout << " initial residual = " << residual_hp << std::endl;
+
         if (residual_hp<tol)
         {
             pcout<<"Simulation has converged!"<<std::endl;
             abort();
         }
 
+
         while (iteration < max_iteration && residual_hp > tol)
         {
+
+
             alpha_3 = 1;
             TrilinosWrappers::MPI::Vector u_k(dis_current_solution);
-            assemble_system_workstream(true);
 
+            rebuild_matrix = true;
+            assemble_system_workstream(hp_index_set);
+            pcout << "norm:" << system_matrix.linfty_norm() << std::endl;
+            //system_matrix.print(std::cout);
+            //assemble_system_workstream(true);
+
+    
             g1 = system_rhs.l2_norm();
             dis_newton_update = system_rhs;
 
@@ -4036,7 +4027,9 @@ namespace HP_ALE
             TrilinosWrappers::MPI::Vector du_k(dis_newton_update);
             dis_current_solution += dis_newton_update;
             current_solution = dis_current_solution;
-            assemble_system_workstream(true);
+            rebuild_matrix = true;
+            assemble_system_workstream(hp_index_set);
+            //assemble_system_workstream(true);
             g3 = system_rhs.l2_norm();
             alpha_final = 1;
             g_final = g3;
@@ -4051,7 +4044,11 @@ namespace HP_ALE
                     du_k *= alpha_3;
                     dis_current_solution += du_k;
                     current_solution = dis_current_solution;
-                    assemble_system_workstream(false);
+
+                    rebuild_matrix = false;
+                    assemble_system_workstream(hp_index_set);
+
+                    //assemble_system_workstream(false);
                     g3 = system_rhs.l2_norm();
                     du_k = dis_newton_update;
                     if (alpha_3<alpha_min)
@@ -4067,7 +4064,11 @@ namespace HP_ALE
                 du_k *= alpha_2;
                 dis_current_solution += du_k;
                 current_solution = dis_current_solution;
-                assemble_system_workstream(false);
+
+                rebuild_matrix = false;
+                assemble_system_workstream(hp_index_set);
+
+                //assemble_system_workstream(false);
                 g2 = system_rhs.l2_norm();
                 du_k = dis_newton_update;
 
@@ -4082,7 +4083,11 @@ namespace HP_ALE
                 du_k *= alpha_0;
                 dis_current_solution += du_k;
                 current_solution = dis_current_solution;
-                assemble_system_workstream(false);
+
+                rebuild_matrix = false;
+                assemble_system_workstream(hp_index_set);
+
+                //assemble_system_workstream(false);
                 g0 = system_rhs.l2_norm();
                 du_k = dis_newton_update;
 
@@ -4136,9 +4141,6 @@ namespace HP_ALE
     FluidStructureProblem<dim>::output_results(
             const unsigned int step_number) const
     {
-       // std::string filename = filename_base;
-     //   filename +="_quad";
-
         std::vector<std::string> solution_names(dim, "displacement");
         std::vector<DataComponentInterpretation::DataComponentInterpretation>
                 data_component_interpretation(
@@ -4278,17 +4280,18 @@ namespace HP_ALE
         make_grid(n_refinement);
         setup_dofs();
         set_interface_dofs_flag(interface_dofs_flag);
+        //set_interface_dofs_flag(interface_dofs_flag, hp_index_set);
         output_results(0);
 
         uint         step       = 0;
         double       time       = 0.;
         const double final_time = 20.0;//20000. * static_cast<double>(time_step);
 
-        /*std::string   fileNameBaseLsns;
+        std::string   fileNameBaseLsns;
         std::ofstream myfile;
         myfile.open(("output_variables" + fileNameBaseLsns + ".dat").c_str());
         myfile << std::fixed;
-        pcout << "going to do loop" << std::endl;*/
+        pcout << "going to do loop" << std::endl;
 
         do
         {
@@ -4305,7 +4308,7 @@ namespace HP_ALE
                                            hp_relevant_set);
                     pcout << "setup_hp_sparse_matrix" << std::endl;
                 }
-                newton_iteration();
+                newton_iteration(hp_index_set);
             }
 
             dis_volume_old_solution = dis_volume_solution;
@@ -4320,7 +4323,7 @@ namespace HP_ALE
             time += time_step;
         }
         while (time < final_time);
-        //myfile.close();
+        myfile.close();
     }
 } // namespace HP_ALE
 
