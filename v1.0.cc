@@ -45,7 +45,6 @@
 #include <deal.II/base/conditional_ostream.h>
 #include <deal.II/base/index_set.h>
 #include <deal.II/distributed/tria.h>
-#include <deal.II/distributed/shared_tria.h>
 #include <deal.II/numerics/matrix_tools.h>
 #include <deal.II/numerics/solution_transfer.h>
 #include <deal.II/lac/generic_linear_algebra.h>
@@ -71,6 +70,7 @@
 #include <locale>
 #include <deal.II/distributed/solution_transfer.h>
 #include <deal.II/distributed/grid_refinement.h>
+//#define TEST_RESCALING
 
 namespace HP_ALE
 {
@@ -143,10 +143,6 @@ namespace HP_ALE
                            const bool                    print_pattern = false);
         void
         set_interface_dofs_flag(std::vector<unsigned int> &flag);
-        /*void
-        set_interface_dofs_flag(TrilinosWrappers::MPI::Vector &flag,
-                                const IndexSet &hp_index_set);*/
-
         void
         make_boundary_constraints_hp(const IndexSet &hp_relevant_set);
 
@@ -171,9 +167,11 @@ namespace HP_ALE
         void
         make_flux_constraints(AffineConstraints<double> &constraints_flux);
 
-        void newton_iteration(const IndexSet &hp_index_set);
+        void newton_iteration();
         void output_results(const unsigned int refinement_cycle) const;
         void update_constraints(const IndexSet &hp_relevant_set);
+        void scale_matrix_and_rhs(TrilinosWrappers::SparseMatrix &matrix,
+                                  TrilinosWrappers::MPI::Vector  &rhs);
 
         const unsigned int velocity_degree;
         const unsigned int pressure_degree;
@@ -181,9 +179,6 @@ namespace HP_ALE
 
         MPI_Comm     mpi_communicator;
         parallel::distributed::Triangulation<dim> triangulation;
-        //parallel::shared::Triangulation<dim> triangulation;
-           //Triangulation<dim> triangulation;
-
 
         FESystem<dim>      stokes_fe;
         FESystem<dim>      hydrogel_fe;
@@ -195,10 +190,10 @@ namespace HP_ALE
         hp::FECollection<dim> volume_fe_collection;
         DoFHandler<dim>       volume_dof_handler;
 
-         IndexSet volume_locally_owned_dofs;
-         IndexSet volume_locally_relevant_dofs;
-         IndexSet hp_index_set;
-         IndexSet hp_relevant_set;
+        IndexSet volume_locally_owned_dofs;
+        IndexSet volume_locally_relevant_dofs;
+        IndexSet hp_index_set;
+        IndexSet hp_relevant_set;
 
         AffineConstraints<double> constraints_hp_nonzero; // for fe system
         AffineConstraints<double> constraints_hp; // flux constraints + nonzero
@@ -212,7 +207,6 @@ namespace HP_ALE
 
         //SparsityPattern      sparsity_pattern;
         TrilinosWrappers::SparseMatrix system_matrix;
-        SparseMatrix<double> matrix1;
 
         //SparsityPattern      volume_sparsity_pattern;
         TrilinosWrappers::SparseMatrix volume_system_matrix;
@@ -235,14 +229,12 @@ namespace HP_ALE
         TrilinosWrappers::MPI::Vector dis_volume_solution;
         TrilinosWrappers::MPI::Vector dis_volume_old_solution;
 
+        TrilinosWrappers::MPI::Vector     solution_scaling;
+
         std::unique_ptr<MappingQ<dim>> mapping_pointer;
         hp::MappingCollection<dim>     mapping_collection;
 
         std::vector<unsigned int> interface_dofs_flag;
-
-
-
-        bool rebuild_matrix;
 
         const double viscosity;
         const double vis_BM; // viscousity inside hydrogel
@@ -430,9 +422,11 @@ namespace HP_ALE
         local_assemble_hp(
                 const typename DoFHandler<dim>::active_cell_iterator &cell,
                 ScratchData &                                         scratch,
-                PerTaskData &                                         copy_data);
+                PerTaskData &                                         copy_data,
+                const bool update_matrix = true);
         void
-        copy_local_to_global_hp(const PerTaskData &copy_data);
+        copy_local_to_global_hp(const PerTaskData &copy_data,
+                                const bool         update_matrix = true);
         void
         local_assemble_volume(
                 const typename DoFHandler<dim>::active_cell_iterator &cell,
@@ -442,7 +436,7 @@ namespace HP_ALE
         copy_local_to_global_volume(const PerTaskData &copy_data);
 
         void
-        assemble_system_workstream(const IndexSet &hp_index_set);
+        assemble_system_workstream(const bool update_matrix = true);
         void
         assemble_volume_system_workstream();
         void
@@ -516,7 +510,6 @@ namespace HP_ALE
                             typename Triangulation<dim>::MeshSmoothing(
                                     Triangulation<dim>::smoothing_on_refinement |
                                     Triangulation<dim>::smoothing_on_coarsening))
-
             , stokes_fe(create_stokes_fe_list(velocity_degree, pressure_degree),
                         create_fe_multiplicities())
             , hydrogel_fe(create_hydrogel_fe_list(velocity_degree, pressure_degree),
@@ -683,7 +676,7 @@ namespace HP_ALE
             {
                 GridIn<2> gridin;
                 gridin.attach_triangulation(triangulation);
-                std::ifstream f("/home/lexlee/Downloads/v1.0debug/case22.msh");
+                std::ifstream f("/home/lexlee/Downloads/scalempi/case2.msh");
                 //std::ifstream f("/home/lexlee/Downloads/v1.0debug/simplemesh.msh");
                 gridin.read_msh(f);
 
@@ -756,7 +749,7 @@ namespace HP_ALE
                 const SphericalManifold<2> manifold4(center4);
                 GridIn<2> gridin;
                 gridin.attach_triangulation(triangulation);
-                std::ifstream f("case4.msh");
+                std::ifstream f("/home/lexlee/Downloads/scalempi/case4.msh");
                 gridin.read_msh(f);
 
                 triangulation.reset_all_manifolds();
@@ -1006,7 +999,6 @@ namespace HP_ALE
             }
         }
     }
-
 
     template <int dim>
     void
@@ -2243,9 +2235,9 @@ namespace HP_ALE
 
             volume_system_matrix.reinit(sp);
             volume_system_rhs.reinit(volume_locally_owned_dofs,
-                                     volume_locally_relevant_dofs,
-                                     MPI_COMM_WORLD,
-                                     true);
+                                     //volume_locally_relevant_dofs,
+                                     MPI_COMM_WORLD);
+                                     //false);
 
             //volume constraints
             volume_solution.reinit(volume_locally_relevant_dofs,
@@ -2294,18 +2286,12 @@ namespace HP_ALE
 
             const std::vector<types::global_dof_index> dofs_per_block =
                     DoFTools::count_dofs_per_fe_block(dof_handler, block_component);
-           /* const unsigned int n_displacement = dofs_per_block[0];
+            const unsigned int n_displacement = dofs_per_block[0];
             const unsigned int n_mesh_vel     = dofs_per_block[1];
             const unsigned int n_vf           = dofs_per_block[2];
             const unsigned int n_p_hydrogel   = dofs_per_block[3];
             const unsigned int n_V            = dofs_per_block[4];
-            const unsigned int n_P            = dofs_per_block[5];*/
-            const types::global_dof_index n_displacement = dofs_per_block[0];
-            const types::global_dof_index n_mesh_vel     = dofs_per_block[1];
-            const types::global_dof_index n_vf           = dofs_per_block[2];
-            const types::global_dof_index n_p_hydrogel   = dofs_per_block[3];
-            const types::global_dof_index n_V            = dofs_per_block[4];
-            const types::global_dof_index n_P            = dofs_per_block[5];
+            const unsigned int n_P            = dofs_per_block[5];
             // const unsigned int n_phi_s = volume_dof_handler.n_dofs();
 
             pcout << "   Number of active cells: "
@@ -2320,26 +2306,26 @@ namespace HP_ALE
             hp_index_set = dof_handler.locally_owned_dofs();
             hp_relevant_set = DoFTools::extract_locally_relevant_dofs(dof_handler);
 
-            solution.reinit(hp_relevant_set,
-                            MPI_COMM_WORLD);
-
-            /*solution.reinit(hp_index_set,
-                            hp_relevant_set,
+            /*solution.reinit(hp_relevant_set,
                             MPI_COMM_WORLD);*/
+
+            solution.reinit(hp_index_set,
+                            hp_relevant_set,
+                            MPI_COMM_WORLD);
             old_solution.reinit(solution);
             current_solution.reinit(solution);
             newton_update.reinit(solution);
 
-            /*system_rhs.reinit(hp_index_set,
-                              MPI_COMM_WORLD);*/
-
             system_rhs.reinit(hp_index_set,
-                              hp_relevant_set,
+                              MPI_COMM_WORLD);
+
+            /*system_rhs.reinit(hp_index_set,
+                   hp_relevant_set,
                               MPI_COMM_WORLD,
-                              true);
-            /*dis_solution.reinit(system_rhs);*/
-            dis_solution.reinit(hp_index_set,
-                                MPI_COMM_WORLD);
+                              true);*/
+            dis_solution.reinit(system_rhs);
+            /*dis_solution.reinit(hp_index_set,
+                                MPI_COMM_WORLD);*/
             dis_old_solution.reinit(dis_solution);
             dis_current_solution.reinit(dis_solution);
             dis_newton_update.reinit(dis_solution);
@@ -2462,12 +2448,12 @@ namespace HP_ALE
     FluidStructureProblem<dim>::setup_hp_sparse_matrix(const IndexSet &hp_index_set,
                                                        const IndexSet &hp_relevant_set)
     {
-
+        //DynamicSparsityPattern dsp(hp_relevant_set);
         Table<2, DoFTools::Coupling> cell_coupling, face_coupling;
         const bool print_coupling_pattern = false;
         make_coupling(cell_coupling, face_coupling, print_coupling_pattern);
 
-        /*TrilinosWrappers::SparsityPattern dsp(hp_index_set,
+        TrilinosWrappers::SparsityPattern dsp(hp_index_set,
                                              hp_index_set,
                                              hp_relevant_set,
                                              MPI_COMM_WORLD);
@@ -2481,48 +2467,30 @@ namespace HP_ALE
                                              Utilities::MPI::this_mpi_process(
                                                 MPI_COMM_WORLD));
         dsp.compress();
-        system_matrix.reinit(dsp);*/
+        system_matrix.reinit(dsp);
+        //sparsity_pattern.copy_from(dsp);
+         // 892794
+        /*system_matrix.reinit(hp_index_set,
+                             sparsity_pattern,
+                             mpi_communicator);*/ // 893288
+        //condense, dofs 901310
+       /*system_matrix.reinit(hp_index_set,
+                             sparsity_pattern,
+                             mpi_communicator);*/ 
 
-        DynamicSparsityPattern dsp(hp_relevant_set);
-        DoFTools::make_flux_sparsity_pattern(dof_handler,
+        /*DoFTools::make_flux_sparsity_pattern(dof_handler,
                                              dsp,
-                                             constraints_newton_update,
-                                             true,
                                              cell_coupling,
                                              face_coupling,
                                              Utilities::MPI::this_mpi_process(
-                                                     MPI_COMM_WORLD));
-        SparsityTools::distribute_sparsity_pattern(dsp,
-                                                   hp_index_set,
-                                                   MPI_COMM_WORLD,
-                                                   hp_relevant_set);
-        system_matrix.reinit(hp_index_set,
-                             hp_index_set,
-                             dsp,
-                             MPI_COMM_WORLD,
-                             true);
+                                                     MPI_COMM_WORLD));*/
+        /*constraints_newton_update.condense(dsp);
 
-        /*DynamicSparsityPattern dsp(hp_relevant_set);
-        DoFTools::make_flux_sparsity_pattern(dof_handler,
-                                             dsp,
-                                             cell_coupling,
-                                             face_coupling);
-        constraints_newton_update.condense(dsp);
-
-        DoFTools::make_sparsity_pattern(dof_handler,
-                                        dsp,
-                                        constraints_newton_update,
-                                        false);
-        sparsity_pattern.copy_from(dsp);
-
-        matrix1.reinit(sparsity_pattern);
-
-        system_matrix.reinit(hp_index_set,
-                             hp_index_set,
-                             matrix1,
-                             MPI_COMM_WORLD,
-                             1e-13,
-                             true);*/
+        sparsity_pattern.copy_from(dsp);*/
+        /*system_matrix.reinit(hp_index_set,
+                             sparsity_pattern,
+                             MPI_COMM_WORLD);*/
+        //system_matrix.reinit(sparsity_pattern);
 
     }
 
@@ -2578,14 +2546,16 @@ namespace HP_ALE
                         coeff * normal[comp - starting_comp] / normal[line_comp];
                 col_vals_pair.emplace_back(cols[i], entry);
                 constrainted_flag[cols[i]] = true;
-
-                //pcout << " constraint(" << row << "," << cols[i] << ")=" << entry;
-
+#if 0
+                pcout << " constraint(" << row << "," << cols[i] << ")=" << entry
+                << std::endl;
+#endif
             }
         }
         constraints_flux.add_entries(row, col_vals_pair);
     }
 
+    //no need to modify
     template <int dim>
     void
     FluidStructureProblem<dim>::set_interface_dofs_flag(
@@ -2593,11 +2563,8 @@ namespace HP_ALE
     {
         flag.clear();
         flag.resize(dof_handler.n_locally_owned_dofs(), 1);
-        //flag.resize(dof_handler.n_locally_owned_dofs(), 0);
         const unsigned int hydrogel_dofs_per_cell = hydrogel_fe.dofs_per_cell;
-        const unsigned int stokes_dofs_per_cell = stokes_fe.dofs_per_cell;
         for (const auto &cell : dof_handler.active_cell_iterators())
-        {
             if (cell->is_locally_owned())
             {
                 if (cell_is_in_hydrogel_domain(cell))
@@ -2608,42 +2575,8 @@ namespace HP_ALE
                     for (unsigned int i = 0; i < hydrogel_dofs_per_cell; ++i)
                         flag[local_dof_indices[i]] = 0;
                 }
-
             }
-        }
     }
-
-    /*template <int dim>
-    void
-    FluidStructureProblem<dim>::set_interface_dofs_flag(
-        TrilinosWrappers::MPI::Vector &flag,
-        const IndexSet &hp_index_set
-        const IndexSet &hp_relevant_set)
-    {
-        flag.clear();
-        flag.reinit(hp_index_set, hp_relevant_set, MPI_COMM_WORLD, true);
-        flag = 1;
-
-        //flag.resize(dof_handler.n_locally_owned_dofs(), 1);
-        //const unsigned int hydrogel_dofs_per_cell = hydrogel_fe.dofs_per_cell;
-
-        for (const auto &cell : dof_handler.active_cell_iterators())
-        {
-            const unsigned int hydrogel_dofs_per_cell =
-                    cell->get_fe().dofs_per_cell;
-            if (cell->is_locally_owned())
-            {
-                if (cell_is_in_hydrogel_domain(cell))
-                {
-                    std::vector<types::global_dof_index> local_dof_indices(
-                            hydrogel_dofs_per_cell);
-                    cell->get_dof_indices(local_dof_indices);
-                    for (unsigned int i = 0; i < hydrogel_dofs_per_cell; ++i)
-                        flag[local_dof_indices[i]] = 0;
-                }
-            }
-        }
-    }*/
 
     // This function uses volume_solution to compute the velocity constraint on
     // the hydrogel surface
@@ -2903,7 +2836,7 @@ namespace HP_ALE
                                 } // q loop
                             }
                         }
-            }//if locally owned
+            }
 
     }
 
@@ -3109,6 +3042,10 @@ namespace HP_ALE
     FluidStructureProblem<dim>::solve_volume()
     {
         pcout << " solving volume..." << std::endl;
+        /*SolverControl                    solver_control;
+        TrilinosWrappers::SolverDirect::AdditionalData data(false, "Amesos_Mumps");
+        TrilinosWrappers::SolverDirect solver(solver_control, data);
+        solver.solve(volume_system_matrix, dis_volume_solution, volume_system_rhs);*/
         solver(volume_system_matrix, dis_volume_solution, volume_system_rhs);
         auto it_old = dis_volume_old_solution.begin();
         for (auto it = dis_volume_solution.begin(); it != dis_volume_solution.end();
@@ -3127,8 +3064,10 @@ namespace HP_ALE
     FluidStructureProblem<dim>::local_assemble_hp(
             const typename DoFHandler<dim>::active_cell_iterator &cell_hp,
             ScratchData &                                         scratch,
-            PerTaskData &                                         copy_data)
+            PerTaskData &                                         copy_data,
+            const bool                                            update_matrix)
     {
+
         copy_data.assemble_interface = false;
 
         scratch.hp_fe_values.reinit(cell_hp);
@@ -3151,7 +3090,6 @@ namespace HP_ALE
         copy_data.local_dof_indices.resize(dofs_per_cell);
         cell_hp->get_dof_indices(copy_data.local_dof_indices);
 
-        //const unsigned int hydrogel_dofs_per_cell = hydrogel_fe.dofs_per_cell;
         // declaring all test functions
         std::vector<Tensor<2, dim>> grad_shape_stokes_velocity(
                 stokes_dofs_per_cell); // \nabla psi_V
@@ -3187,6 +3125,7 @@ namespace HP_ALE
         {
             // pcout<<"assembling stokes domain..."<<std::endl;
             Assert(dofs_per_cell == stokes_dofs_per_cell, ExcInternalError());
+
             // grad u(gradients of mesh displacement)
             std::vector<Tensor<2, dim>> grad_u(n_q_points); // \nabla u
             fe_values[extractor_displacement].get_function_gradients(
@@ -3242,7 +3181,6 @@ namespace HP_ALE
 
                 for (unsigned int i = 0; i < dofs_per_cell; ++i)
                 {
-                    //interface_dofs_flag[copy_data.local_dof_indices[i]] = 1;
                     // Sigma^star F_hat_inv_transpose_star J_hat_star
                     tmp_rhs = 0.;
                     tmp_rhs +=
@@ -3256,11 +3194,9 @@ namespace HP_ALE
                                            grad_shape_stokes_velocity[i]) + // A_4
 
                             jacobian * scalar_product(inv_F_T, grad_vq) *
-                            shape_stokes_pressure[i]  + // A_6
-                           /* alpha *
-                            scalar_product(grad_u[q],
-                                            grad_shape_displacement[i]);*/
-                             alpha *
+                            shape_stokes_pressure[i] + // A_6
+
+                            alpha *
                             scalar_product(grad_u[q],
                                            grad_shape_displacement[i]) *
                             static_cast<double>(
@@ -3273,10 +3209,8 @@ namespace HP_ALE
 
                 // assemble local matrix
 
-                if (rebuild_matrix == true)
+                if (update_matrix)
                     for (unsigned int i = 0; i < dofs_per_cell; ++i)
-                    {
-                       // interface_dofs_flag[copy_data.local_dof_indices[i]] = 1;
                         for (unsigned int j = 0; j < dofs_per_cell; ++j)
                         {
                             tmp_mat = 0.;
@@ -3295,25 +3229,19 @@ namespace HP_ALE
 
                                     jacobian *
                                     scalar_product(inv_F_T, grad_shape_stokes_velocity[j]) *
-                                    shape_stokes_pressure[i]  + // A'_6
+                                    shape_stokes_pressure[i] + // A'_6
 
-                                   /* alpha *
+                                    alpha *
                                     scalar_product(grad_shape_displacement[j],
-                                    grad_shape_displacement[i]) ;*/
-
-                             alpha *
-                            scalar_product(grad_shape_displacement[j],
-                                           grad_shape_displacement[i]) *
-                            static_cast<double>(
-                                    interface_dofs_flag
-                                    [copy_data.local_dof_indices[i]]); // A'_13
+                                                   grad_shape_displacement[i]) *
+                                    static_cast<double>(
+                                            interface_dofs_flag
+                                            [copy_data.local_dof_indices[i]]); // A'_13
 
                             // add all the other terms here using the same format
                             // no need to change this
                             copy_data.cell_matrix(i, j) += fe_values.JxW(q) * tmp_mat;
                         } // dofs loop
-                    }
-
             }         // q loop
         } // outer domain (fluid domain)
 
@@ -3475,7 +3403,7 @@ namespace HP_ALE
 
                 // assemble local matrix
 
-                if (rebuild_matrix == true)
+                if (update_matrix)
                     for (unsigned int i = 0; i < dofs_per_cell; ++i)
                         for (unsigned int j = 0; j < dofs_per_cell; ++j)
                         {
@@ -3706,7 +3634,7 @@ namespace HP_ALE
                                             term10(stokes_velocity_face[q],
                                                    shape_stokes_velocity_face[i]);
 
-                                    if (rebuild_matrix == true)
+                                    if (update_matrix)
                                         for (unsigned int j = 0; j < stokes_dofs_per_cell;
                                              ++j)
                                         {
@@ -3727,7 +3655,7 @@ namespace HP_ALE
                                                   -shape_vf_face[i]) +
                                             term10(stokes_velocity_face[q],
                                                    -shape_vf_face[i]);
-                                    if (rebuild_matrix == true)
+                                    if (update_matrix)
                                         for (unsigned int j = 0; j < stokes_dofs_per_cell;
                                              ++j)
                                         {
@@ -3747,7 +3675,7 @@ namespace HP_ALE
                                                   shape_stokes_velocity_face[i]) +
                                             term10(-vf_face[q],
                                                    shape_stokes_velocity_face[i]);
-                                    if (rebuild_matrix == true)
+                                    if (update_matrix)
                                         for (unsigned int j = 0;
                                              j < hydrogel_dofs_per_cell;
                                              ++j)
@@ -3771,7 +3699,7 @@ namespace HP_ALE
                                                    shape_vf_face[i] - shape_vs_face[i]); //+
                                     //                      term14(grad_u_face[q],
                                     //                      shape_u_face[i]);
-                                    if (rebuild_matrix == true)
+                                    if (update_matrix)
                                         for (unsigned int j = 0;
                                              j < hydrogel_dofs_per_cell;
                                              ++j)
@@ -3786,11 +3714,7 @@ namespace HP_ALE
                                             //                          shape_u_face[i]);
                                         }
                                 }
-
-
                             } // quadrature loop
-
-
                         }
                     } // face loop
 
@@ -3802,10 +3726,11 @@ namespace HP_ALE
     template <int dim>
     void
     FluidStructureProblem<dim>::copy_local_to_global_hp(
-            const PerTaskData &copy_data)
+            const PerTaskData &copy_data,
+            const bool         update_matrix)
     {
         //pcout << " copier " << std::endl;
-        if (rebuild_matrix == true)
+        if (update_matrix)
         {
             constraints_newton_update.distribute_local_to_global(
                     copy_data.cell_matrix,
@@ -3889,9 +3814,10 @@ namespace HP_ALE
     //no need to modify
     template <int dim>
     void
-    FluidStructureProblem<dim>::assemble_system_workstream(const IndexSet &hp_index_set)
+    FluidStructureProblem<dim>::assemble_system_workstream(
+            const bool update_matrix)
     {
-        if (rebuild_matrix == true)
+        if (update_matrix)
             system_matrix = 0;
 
         system_rhs = 0;
@@ -3930,24 +3856,14 @@ namespace HP_ALE
 
         PerTaskData cp;
 
-        /*auto worker =
-                [this, &update_matrix = std::as_const(update_matrix)](const typename DoFHandler<dim>::active_cell_iterator &cell,
-                                                                      ScratchData &                                         scratch,
-                                                                      PerTaskData &                                         copy_data) {
-                    this->local_assemble_hp(cell, scratch, copy_data, update_matrix);
-                };
-        auto copier = [this, &update_matrix = std::as_const(update_matrix)](const PerTaskData &copy_data) {
-            this->copy_local_to_global_hp(copy_data, update_matrix);
-        };*/
-
         auto worker =
-                [this](const typename DoFHandler<dim>::active_cell_iterator &cell,
+                [=, &update_matrix = std::as_const(update_matrix)](const typename DoFHandler<dim>::active_cell_iterator &cell,
                                                                       ScratchData &                                         scratch,
                                                                       PerTaskData &                                         copy_data) {
-                    this->local_assemble_hp(cell, scratch, copy_data);
+                    local_assemble_hp(cell, scratch, copy_data, update_matrix);
                 };
-        auto copier = [this](const PerTaskData &copy_data) {
-            this->copy_local_to_global_hp(copy_data);
+        auto copier = [=, &update_matrix = std::as_const(update_matrix)](const PerTaskData &copy_data) {
+            copy_local_to_global_hp(copy_data, update_matrix);
         };
 
         WorkStream::run(CellFilter(IteratorFilters::LocallyOwnedCell(),
@@ -3955,23 +3871,91 @@ namespace HP_ALE
                         CellFilter(IteratorFilters::LocallyOwnedCell(),
                                    dof_handler.end()),
                         worker, copier, sd, cp);
-        if (rebuild_matrix == true)
-        {
-            system_matrix.compress(VectorOperation::add);
-        }
 
+        system_matrix.compress(VectorOperation::add);
         system_rhs.compress(VectorOperation::add);
-
-        rebuild_matrix = false;
 
         //pcout << "Number of non-zero elements: " << system_matrix.n_nonzero_elements() << std::endl;
 
     }
 
+    template <int dim>
+    void FluidStructureProblem<dim>::scale_matrix_and_rhs(TrilinosWrappers::SparseMatrix &matrix,
+                                                          TrilinosWrappers::MPI::Vector  &rhs)
+    {
+        pcout<<" scaling..."<<std::flush;
+
+#ifdef TEST_RESCALING
+        TrilinosWrappers::MPI::Vector tmp_sol(dis_current_solution);
+    {
+      solver(system_matrix, dis_newton_update, system_rhs);
+      constraints_newton_update.distribute(newton_update);
+      tmp_sol = dis_newton_update;
+    }
+#endif
+
+        const unsigned int n_dofs = dof_handler.n_locally_owned_dofs();
+        solution_scaling.reinit(dis_newton_update);
+        solution_scaling = 1.;
+
+        for (unsigned int r = 0; r < n_dofs; ++r)
+        {
+            const unsigned int        n_cols = matrix.row_length(r);
+            std::vector<double>       values(n_cols);
+            std::vector<unsigned int> cols(n_cols);
+            // count the number of entries
+            unsigned int j = 0;
+            for (TrilinosWrappers::SparseMatrixIterators::Iterator<true> it = matrix.begin(r);
+                 it != matrix.end(r); it++)
+            {
+                // get the column index
+                const unsigned int c = it->column();
+                // get the (r,c) entry and scale
+                values[j]            = matrix(r, c) * solution_scaling(c);
+                // store column index
+                cols[j]              = c;
+                j++;
+            }
+
+            // get the norm, use l1 norm here
+            // may need to test other norms to find the best one
+            double norm = std::fabs(values[0]);
+            for (unsigned int i = 1; i < n_cols; ++i)
+            {
+                norm = (norm < std::fabs(values[i]) ) ?
+                        std::fabs(values[i]) : norm;
+                /*if (norm < std::fabs(values[i]) )
+                {
+                    norm = std::fabs(values[i]);
+                }*/
+            }
+            norm = (std::fabs(norm)<1e-8) ? 1.0:norm;
+            const double   row_scaling_factor = 1.0 / norm;
+            // scale rhs
+            rhs(r) *= row_scaling_factor;
+            // scale matrix
+            for (unsigned int i = 0; i < n_cols; ++i)
+                values[i] *= row_scaling_factor;
+            matrix.set(r, cols, values);
+        }
+
+#ifdef TEST_RESCALING
+    {
+      solver(system_matrix, dis_newton_update, system_rhs);
+      constraints_newton_update.distribute(newton_update);
+
+      TrilinosWrappers::MPI::Vector diff(dis_solution);
+      diff = dis_newton_update;
+      diff.sadd(-1.0, tmp_sol);
+      pcout<<" diff: "<<diff.norm_sqr()<<std::endl;
+    }
+#endif
+
+    }
 //change this later for parallel computing
     template <int dim>
     void
-    FluidStructureProblem<dim>::newton_iteration(const IndexSet &hp_index_set)
+    FluidStructureProblem<dim>::newton_iteration()
     {
         pcout << " newton iteration... " << std::endl;
         // set the Newton iterate v* to v_n
@@ -3985,9 +3969,7 @@ namespace HP_ALE
         unsigned int       iteration     = 0;
         const double       tol           = 1e-8;
         const double       alpha_min     = 0.01;
-        rebuild_matrix = false;
-        assemble_system_workstream(hp_index_set);
-        //assemble_system_workstream(false);
+        assemble_system_workstream(false);
         double residual_hp = system_rhs.l2_norm();
 
         double g1,g2,g3,g0,g_final; // the l2 norm for the rhs u_k
@@ -3995,41 +3977,41 @@ namespace HP_ALE
         double h1, h2, h3;
 
         pcout << " initial residual = " << residual_hp << std::endl;
-
         if (residual_hp<tol)
         {
             pcout<<"Simulation has converged!"<<std::endl;
             abort();
         }
 
-
         while (iteration < max_iteration && residual_hp > tol)
         {
-
-
             alpha_3 = 1;
             TrilinosWrappers::MPI::Vector u_k(dis_current_solution);
+            assemble_system_workstream(true);
+            scale_matrix_and_rhs(system_matrix, system_rhs);
 
-            rebuild_matrix = true;
-            assemble_system_workstream(hp_index_set);
-            pcout << "norm:" << system_matrix.linfty_norm() << std::endl;
-            //system_matrix.print(std::cout);
-            //assemble_system_workstream(true);
-
-    
             g1 = system_rhs.l2_norm();
             dis_newton_update = system_rhs;
 
             solver(system_matrix, dis_newton_update, system_rhs);
 
+
+            auto scale_pointer = solution_scaling.begin();
+
+            for (auto it = dis_newton_update.begin(); it != dis_newton_update.end();
+                 ++it, ++scale_pointer)
+            {
+                *it = *it * (*scale_pointer);
+            }
+
             constraints_newton_update.distribute(dis_newton_update);
+            //add scale here
+            dis_newton_update = dis_newton_update;
             current_solution = dis_current_solution;
             TrilinosWrappers::MPI::Vector du_k(dis_newton_update);
             dis_current_solution += dis_newton_update;
             current_solution = dis_current_solution;
-            rebuild_matrix = true;
-            assemble_system_workstream(hp_index_set);
-            //assemble_system_workstream(true);
+            assemble_system_workstream(true);
             g3 = system_rhs.l2_norm();
             alpha_final = 1;
             g_final = g3;
@@ -4044,11 +4026,7 @@ namespace HP_ALE
                     du_k *= alpha_3;
                     dis_current_solution += du_k;
                     current_solution = dis_current_solution;
-
-                    rebuild_matrix = false;
-                    assemble_system_workstream(hp_index_set);
-
-                    //assemble_system_workstream(false);
+                    assemble_system_workstream(false);
                     g3 = system_rhs.l2_norm();
                     du_k = dis_newton_update;
                     if (alpha_3<alpha_min)
@@ -4064,11 +4042,7 @@ namespace HP_ALE
                 du_k *= alpha_2;
                 dis_current_solution += du_k;
                 current_solution = dis_current_solution;
-
-                rebuild_matrix = false;
-                assemble_system_workstream(hp_index_set);
-
-                //assemble_system_workstream(false);
+                assemble_system_workstream(false);
                 g2 = system_rhs.l2_norm();
                 du_k = dis_newton_update;
 
@@ -4083,11 +4057,7 @@ namespace HP_ALE
                 du_k *= alpha_0;
                 dis_current_solution += du_k;
                 current_solution = dis_current_solution;
-
-                rebuild_matrix = false;
-                assemble_system_workstream(hp_index_set);
-
-                //assemble_system_workstream(false);
+                assemble_system_workstream(false);
                 g0 = system_rhs.l2_norm();
                 du_k = dis_newton_update;
 
@@ -4280,18 +4250,17 @@ namespace HP_ALE
         make_grid(n_refinement);
         setup_dofs();
         set_interface_dofs_flag(interface_dofs_flag);
-        //set_interface_dofs_flag(interface_dofs_flag, hp_index_set);
-        output_results(0);
+        //output_results(0);
 
         uint         step       = 0;
         double       time       = 0.;
         const double final_time = 20.0;//20000. * static_cast<double>(time_step);
 
-        std::string   fileNameBaseLsns;
+        /*std::string   fileNameBaseLsns;
         std::ofstream myfile;
         myfile.open(("output_variables" + fileNameBaseLsns + ".dat").c_str());
         myfile << std::fixed;
-        pcout << "going to do loop" << std::endl;
+        pcout << "going to do loop" << std::endl;*/
 
         do
         {
@@ -4308,7 +4277,7 @@ namespace HP_ALE
                                            hp_relevant_set);
                     pcout << "setup_hp_sparse_matrix" << std::endl;
                 }
-                newton_iteration(hp_index_set);
+                newton_iteration();
             }
 
             dis_volume_old_solution = dis_volume_solution;
@@ -4323,7 +4292,7 @@ namespace HP_ALE
             time += time_step;
         }
         while (time < final_time);
-        myfile.close();
+        //myfile.close();
     }
 } // namespace HP_ALE
 
