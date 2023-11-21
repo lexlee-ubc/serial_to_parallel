@@ -676,7 +676,7 @@ namespace HP_ALE
             {
                 GridIn<2> gridin;
                 gridin.attach_triangulation(triangulation);
-                std::ifstream f("/home/lexlee/Downloads/scalempi/case2.msh");
+                std::ifstream f("case2_quad.msh");
                 //std::ifstream f("/home/lexlee/Downloads/v1.0debug/simplemesh.msh");
                 gridin.read_msh(f);
 
