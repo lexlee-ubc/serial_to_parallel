@@ -48,7 +48,6 @@
 #include <deal.II/numerics/matrix_tools.h>
 #include <deal.II/numerics/solution_transfer.h>
 #include <deal.II/lac/generic_linear_algebra.h>
-//#include "tests.h"
 #include <deal.II/lac/sparsity_tools.h>
 #include <deal.II/base/mpi.h>
 #include <deal.II/grid/filtered_iterator.h>
@@ -96,95 +95,62 @@ namespace HP_ALE
 
     enum class TestCase
     {
-        case_1,
-        case_2,
-        case_3,
-        case_4,
-        case_5,
-        case_6,
-        case_7
+        pure,
+        rigid
     };
-    static const char *enum_str[] = {"case_1","case_2","case_3","case_4","case_5","case_6","case_7"};
+    static const char *enum_str[] = {"pure","rigid"};
 
-    template <int dim>
-    void
-    print_mesh_info(const Triangulation<dim> &triangulation,
-                    const std::string &       filename)
-    {
-        std::cout << "Mesh info:" << std::endl
-                  << " dimension: " << dim << std::endl
-                  << " no. of cells: " << triangulation.n_active_cells()
-                  << std::endl;
+template <int dim>
+class ExtensionStokesVelocity : public Function<dim>
+{
+public:
+  ExtensionStokesVelocity()
+    : Function<dim>(dim * 4 + 2)
+  {}
+  virtual void
+  vector_value(const Point<dim> &point, Vector<double> &value) const override;
+};
 
-        {
-            std::map<types::boundary_id, unsigned int> boundary_count;
-            for (const auto &face : triangulation.active_face_iterators())
-                if (face->at_boundary())
-                    boundary_count[face->boundary_id()]++;
-            std::cout << " boundary indicators: ";
-            for (const std::pair<const types::boundary_id, unsigned int> &pair :
-                    boundary_count)
-            {
-                std::cout << pair.first << "(" << pair.second << " times) ";
-            }
-            std::cout << std::endl;
-        }
-        std::ofstream out(filename);
-        GridOut       grid_out;
-        grid_out.write_vtu(triangulation, out);
-        std::cout << " written to " << filename << std::endl << std::endl;
-    }
-
-    template <int dim>
-    class ExtensionStokesVelocity : public Function<dim>
-    {
-    public:
-        ExtensionStokesVelocity()
-                : Function<dim>(dim * 4 + 2)
-        {}
-        virtual void
-        vector_value(const Point<dim> &point, Vector<double> &value) const override;
-    };
-
-    template <int dim>
-    void
-    ExtensionStokesVelocity<dim>::vector_value(const Point<dim> &point,
-                                               Vector<double> &  value) const
-    {
-        Assert(dim >= 2, ExcNotImplemented());
-        //const double extension_rate = 0.05;
-        const double x              = point[0];
-        const double y              = point[1];
-        value[dim + dim + dim + 1]  = -25.0*y*(y-0.4);   //case-6, v(x)
-        value[dim + dim + dim + 2]  = y * 0.; //case-6, v(y)
-    }
-
-
-    template <int dim>
-    class InitialDisplacement : public Function<dim>
-    {
-    public:
-        InitialDisplacement()
-                : Function<dim>(dim * 4 + 2)
-        {}
-        virtual void
-        vector_value(const Point<dim> &point, Vector<double> &value) const override;
-    };
-
-    template <int dim>
-    void
-    InitialDisplacement<dim>::vector_value(const Point<dim> &point,
+template <int dim>
+void
+ExtensionStokesVelocity<dim>::vector_value(const Point<dim> &point,
                                            Vector<double> &  value) const
-    {
-        Assert(dim >= 2, ExcNotImplemented());
+{
+  Assert(dim >= 2, ExcNotImplemented());
+  //const double extension_rate = 0.05;
+  const double x              = point[0];
+  const double y              = point[1];
+  value[dim + dim + dim + 1]  = -25.0*y*(y-0.4);   //case-6, v(x)
+  value[dim + dim + dim + 2]  = y * 0.; //case-6, v(y)
+}
 
-        const double x     = point[0];
-        const double x_b   = 4.;
-        const double x_i   = 2.;
-        const double u_max = 1.;
 
-        value[0] = u_max - u_max * (x - x_i) / (x_b - x_i);
-    }
+template <int dim>
+class InitialDisplacement : public Function<dim>
+{
+public:
+  InitialDisplacement()
+    : Function<dim>(dim * 4 + 2)
+  {}
+  virtual void
+  vector_value(const Point<dim> &point, Vector<double> &value) const override;
+};
+
+template <int dim>
+void
+InitialDisplacement<dim>::vector_value(const Point<dim> &point,
+                                       Vector<double> &  value) const
+{
+  Assert(dim >= 2, ExcNotImplemented());
+
+  const double x     = point[0];
+  const double x_b   = 4.;
+  const double x_i   = 2.;
+  const double u_max = 1.;
+
+  value[0] = u_max - u_max * (x - x_i) / (x_b - x_i);
+}
+
     template <int dim>
     class FluidStructureProblem
     {
@@ -201,8 +167,7 @@ namespace HP_ALE
         enum
         {
             fluid_domain_id,
-            hydrogel_domain_id,
-            third_domain_id
+            hydrogel_domain_id
         };
 
         using MeshType     = DoFHandler<dim>;
@@ -218,10 +183,6 @@ namespace HP_ALE
         cell_is_in_hydrogel_domain(
                 const typename DoFHandler<dim>::cell_iterator &cell);
 
-        static bool
-        cell_is_in_third_domain(
-                const typename DoFHandler<dim>::cell_iterator &cell);
-
         std::vector<const FiniteElement<dim> *>
         create_stokes_fe_list(const unsigned int velocity_degree,
                               const unsigned int pressure_degree);
@@ -229,9 +190,6 @@ namespace HP_ALE
         std::vector<const FiniteElement<dim> *>
         create_hydrogel_fe_list(const unsigned int velocity_degree,
                                 const unsigned int pressure_degree);
-
-        std::vector<const FiniteElement<dim> *>
-        create_third_fe_list(const unsigned int velocity_degree);
 
         std::vector<unsigned int>
         create_fe_multiplicities();
@@ -243,12 +201,11 @@ namespace HP_ALE
         void setup_dofs();
         void setup_hp_sparse_matrix(const IndexSet &hp_index_set,
                                     const IndexSet &hp_relevant_set);
+
         void make_coupling(Table<2, DoFTools::Coupling> &cell_coupling,
                            Table<2, DoFTools::Coupling> &face_coupling,
                            const bool                    print_pattern = false);
-        void
-        set_interface_dofs_flag(std::vector<unsigned int> &flag);
-   
+
         void
         make_boundary_constraints_hp(const IndexSet &hp_relevant_set);
 
@@ -269,26 +226,18 @@ namespace HP_ALE
                                   const Point<dim> &             gsp,
                                   const std::vector<Point<dim>> &fsp,
                                   AffineConstraints<double> &    constraints_flux);
-        void
-        add_interface2_constraints(const FESystem<dim> &                      fe,
-                                  const types::global_dof_index              row,
-                                  const std::vector<types::global_dof_index> cols,
-                                  const uint                     line_comp,
-                                  const uint                     starting_comp,
-                                  const uint                     num_comp,
-                                  const Point<dim> &             gsp,
-                                  const std::vector<Point<dim>> &fsp,
-                                  AffineConstraints<double> &    constraints_flux2);
-//interface 2 constraints
+
         void
         make_flux_constraints(AffineConstraints<double> &constraints_flux);
-        void
-        make_flux2_constraints(AffineConstraints<double> &constraints_flux2);
 
         void newton_iteration();
         void output_results(const unsigned int refinement_cycle) const;
         void update_constraints(const IndexSet &hp_relevant_set);
-
+        /* void
+         set_interface_dofs_flag(std::vector<unsigned int> &flag);*/
+        void
+        set_interface_dofs_flag(TrilinosWrappers::MPI::Vector &flag,
+                                const IndexSet &hp_relevant_set);
         void compute_cauchy_stress();
 
         const unsigned int velocity_degree;
@@ -296,11 +245,13 @@ namespace HP_ALE
         const unsigned int volume_degree;
 
         MPI_Comm     mpi_communicator;
+        const unsigned int n_mpi_processes;
+        const unsigned int this_mpi_process;
+
         parallel::distributed::Triangulation<dim> triangulation;
 
         FESystem<dim>      stokes_fe;
         FESystem<dim>      hydrogel_fe;
-        FESystem<dim>      third_fe;
 
         FE_Q<dim>          volume_fe; // volume fraction phi_s
 
@@ -321,11 +272,8 @@ namespace HP_ALE
         AffineConstraints<double> constraints_boundary; // newton update boundary
         AffineConstraints<double> constraints_volume;   // for phi_s
         AffineConstraints<double> constraints_flux;
-        AffineConstraints<double> constraints_flux2;
 
         std::vector<bool> constrainted_flag;
-        std::vector<bool> constrainted_flag2;
-        
         SparsityPattern      sparsity_pattern;
 
         //SparsityPattern      sparsity_pattern;
@@ -352,14 +300,20 @@ namespace HP_ALE
         TrilinosWrappers::MPI::Vector dis_volume_solution;
         TrilinosWrappers::MPI::Vector dis_volume_old_solution;
 
-        std::vector<Vector<double>> strain;
+        /*std::vector<Vector<double>> strain;
         std::vector<Vector<double>> stress_s;
-        std::vector<Vector<double>> stress_f;
+        std::vector<Vector<double>> stress_f;*/
+
+        std::vector<TrilinosWrappers::MPI::Vector> strain;
+        std::vector<TrilinosWrappers::MPI::Vector> stress_s;
+        std::vector<TrilinosWrappers::MPI::Vector> stress_f;
 
         std::unique_ptr<MappingQ<dim>> mapping_pointer;
+
         hp::MappingCollection<dim>     mapping_collection;
 
-        std::vector<unsigned int> interface_dofs_flag;
+        /*std::vector<unsigned int> interface_dofs_flag;*/
+        TrilinosWrappers::MPI::Vector  interface_dofs_flag;
 
         const double viscosity;
         const double vis_BM; // viscousity inside hydrogel
@@ -371,6 +325,7 @@ namespace HP_ALE
         const double xi;                       // friction coe
         const double alpha;                    // mesh coe
         double       time_step, old_time_step; //\delta t
+        unsigned int timestep_number;
         double       hmin;
         const double phi_s0 = 0.1;
 
@@ -392,10 +347,8 @@ namespace HP_ALE
 
             FEFaceValues<dim>    stokes_fe_face_values;      //
             FEFaceValues<dim>    hydrogel_fe_face_values;    //
-            FEFaceValues<dim>    third_fe_face_values;
-            FESubfaceValues<dim> stokes_fe_subface_values;   // gamma1
-            FESubfaceValues<dim> hydrogel_fe_subface_values; // gamma1
-            FESubfaceValues<dim> third_fe_subface_values;   // gamma2
+            FESubfaceValues<dim> stokes_fe_subface_values;   // gamma
+            FESubfaceValues<dim> hydrogel_fe_subface_values; // gamma
 
             hp::FEValues<dim>    volume_fe_values;
             FEFaceValues<dim>    volume_fe_face_values;
@@ -406,7 +359,6 @@ namespace HP_ALE
                         hp::MappingCollection<dim>  mapping_collection,
                         const FiniteElement<dim> &  stokes_fe,
                         const FiniteElement<dim> &  hydrogel_fe,
-                        const FiniteElement<dim> &  third_fe,
                         const FiniteElement<dim> &  volume_fe,
                         const hp::QCollection<dim> &q_collection,
                         const hp::QCollection<dim> &volume_q_collection,
@@ -427,10 +379,6 @@ namespace HP_ALE
                                               hydrogel_fe,
                                               face_quadrature,
                                               face_update_flags)
-                    , third_fe_face_values(mapping_collection[0],
-                                           third_fe,
-                                           face_quadrature,
-                                           face_update_flags)
                     , stokes_fe_subface_values(mapping_collection[0],
                                                stokes_fe,
                                                face_quadrature,
@@ -439,10 +387,6 @@ namespace HP_ALE
                                                  hydrogel_fe,
                                                  face_quadrature,
                                                  face_update_flags)
-                    , third_fe_subface_values(mapping_collection[0],
-                                              third_fe,
-                                              face_quadrature,
-                                              face_update_flags)
                     , volume_fe_values(mapping_collection,
                                        volume_fe_collection,
                                        volume_q_collection,
@@ -473,11 +417,6 @@ namespace HP_ALE
                             scratch_data.hydrogel_fe_face_values.get_fe(),
                             scratch_data.hydrogel_fe_face_values.get_quadrature(),
                             scratch_data.hydrogel_fe_face_values.get_update_flags())
-                    , third_fe_face_values(
-                            scratch_data.mapping_collection[0],
-                            scratch_data.third_fe_face_values.get_fe(),
-                            scratch_data.third_fe_face_values.get_quadrature(),
-                            scratch_data.third_fe_face_values.get_update_flags())
                     , stokes_fe_subface_values(
                             scratch_data.mapping_collection[0],
                             scratch_data.stokes_fe_subface_values.get_fe(),
@@ -488,11 +427,6 @@ namespace HP_ALE
                             scratch_data.hydrogel_fe_subface_values.get_fe(),
                             scratch_data.hydrogel_fe_subface_values.get_quadrature(),
                             scratch_data.hydrogel_fe_subface_values.get_update_flags())
-                    , third_fe_subface_values(
-                            scratch_data.mapping_collection[0],
-                            scratch_data.third_fe_subface_values.get_fe(),
-                            scratch_data.third_fe_subface_values.get_quadrature(),
-                            scratch_data.third_fe_subface_values.get_update_flags())
                     , volume_fe_values(
                             scratch_data.mapping_collection,
                             scratch_data.volume_fe_values.get_fe_collection(),
@@ -532,34 +466,7 @@ namespace HP_ALE
             FullMatrix<double> interface_matrix4; //(hydrogel,hydrogel)
             Vector<double>     interface_rhs4;
             std::vector<types::global_dof_index> neighbor_dof_indices;
-
-            // four different kinds of coupling
-            std::vector<FullMatrix<double>> cell_interface_matrix1; //(stokes,stokes)
-            std::vector<Vector<double>>     cell_interface_rhs1;
-            std::vector<FullMatrix<double>>
-                    cell_interface_matrix2; //(stokes,hydrogel)
-            std::vector<Vector<double>> cell_interface_rhs2;
-            std::vector<FullMatrix<double>>
-                    cell_interface_matrix3; //(hydrogel,stokes)
-            std::vector<Vector<double>> cell_interface_rhs3;
-            std::vector<FullMatrix<double>>
-                    cell_interface_matrix4; //(hydrogel,hydrogel)
-            std::vector<Vector<double>> cell_interface_rhs4;
-
-            void
-            clear_cell_interface()
-            {
-                cell_interface_matrix1.clear();
-                cell_interface_rhs1.clear();
-                cell_interface_matrix2.clear();
-                cell_interface_rhs2.clear();
-                cell_interface_matrix3.clear();
-                cell_interface_rhs3.clear();
-                cell_interface_matrix4.clear();
-                cell_interface_rhs4.clear();
-            };
         };
-
         void
         solver(TrilinosWrappers::SparseMatrix &matrix,
                                            TrilinosWrappers::MPI::Vector &sol,
@@ -626,24 +533,6 @@ namespace HP_ALE
         return fe_list;
     }
 
-    //third phase fe list
-    template <int dim>
-    std::vector<const FiniteElement<dim> *>
-    FluidStructureProblem<dim>::create_third_fe_list(
-            const unsigned int velocity_degree)
-    {
-        std::vector<const FiniteElement<dim> *> fe_list;
-        fe_list.push_back(new FE_Q<dim>(velocity_degree)); //(dim) displacement
-        fe_list.push_back(
-                new FE_Q<dim>(velocity_degree)); //(dim) cell velocity
-        fe_list.push_back(
-                new FE_Nothing<dim>()); //(dim) hydrogel fluid velocity v_f
-        fe_list.push_back(new FE_Nothing<dim>()); //(1)   hydrogel pressure
-        fe_list.push_back(new FE_Nothing<dim>()); //(dim) outer fluid velocity V_f
-        fe_list.push_back(new FE_Nothing<dim>()); //(1)   pressure P
-        return fe_list;
-    }
-
     template <int dim>
     std::vector<unsigned int>
     FluidStructureProblem<dim>::create_fe_multiplicities()
@@ -670,6 +559,8 @@ namespace HP_ALE
             , pressure_degree(pressure_degree)
             , volume_degree(volume_degree)
             , mpi_communicator(MPI_COMM_WORLD)
+            , n_mpi_processes(Utilities::MPI::n_mpi_processes(mpi_communicator))
+            , this_mpi_process(Utilities::MPI::this_mpi_process(mpi_communicator))
            , triangulation(mpi_communicator,
                             typename Triangulation<dim>::MeshSmoothing(
                                     Triangulation<dim>::smoothing_on_refinement |
@@ -678,8 +569,6 @@ namespace HP_ALE
                         create_fe_multiplicities())
             , hydrogel_fe(create_hydrogel_fe_list(velocity_degree, pressure_degree),
                           create_fe_multiplicities())
-            , third_fe(create_third_fe_list(velocity_degree),
-                       create_fe_multiplicities())
             , volume_fe(volume_degree)
             , dof_handler(triangulation)
             , volume_dof_handler(triangulation)
@@ -692,8 +581,9 @@ namespace HP_ALE
             , eta(0.035)///
             , xi(40)//zijizhao
             , alpha(10)
-            , time_step(0.0005)
+            , time_step(0.001)
             , old_time_step(time_step)
+            , timestep_number(0)
             , extractor_displacement(0)
             , extractor_mesh_velocity(dim)
             , extractor_hydrogel_velocity(dim + dim)
@@ -702,9 +592,9 @@ namespace HP_ALE
             , extractor_stokes_pressure(dim + dim + dim + 1 + dim)
             , pcout(std::cout,
                     (Utilities::MPI::this_mpi_process(mpi_communicator) == 0))
-            , computing_timer(mpi_communicator,
+            , computing_timer(MPI_COMM_WORLD,
                               pcout,
-                              TimerOutput::never,
+                              TimerOutput::summary,
                               TimerOutput::wall_times)
     {
         // active fe id:
@@ -712,16 +602,15 @@ namespace HP_ALE
         // 1: hydrogel domain
         fe_collection.push_back(stokes_fe);
         fe_collection.push_back(hydrogel_fe);
-        fe_collection.push_back(third_fe);
 
         volume_fe_collection.push_back(FE_Nothing<dim>());
+
         volume_fe_collection.push_back(volume_fe);
-        volume_fe_collection.push_back(FE_Nothing<dim>());
         print_variables();
 
         switch (test_case)
         {
-            case TestCase::case_1:
+            case TestCase::pure:
             {
                 const bool         use_on_all_cells = true;
                 const unsigned int mapping_degree   = velocity_degree;
@@ -730,7 +619,7 @@ namespace HP_ALE
 
                 break;
             }
-            case TestCase::case_2:
+            case TestCase::rigid:
             {
                 const bool         use_on_all_cells = true;
                 const unsigned int mapping_degree   = velocity_degree;
@@ -738,60 +627,11 @@ namespace HP_ALE
                 mapping_pointer =
                         std::make_unique<MappingQ<dim>>(mapping_degree, use_on_all_cells);
 
-                break;
-            }
-            case TestCase::case_3:
-            {
-                const bool         use_on_all_cells = true;
-                const unsigned int mapping_degree   = velocity_degree;
-
-                mapping_pointer =
-                        std::make_unique<MappingQ<dim>>(mapping_degree, use_on_all_cells);
-
-                break;
-            }
-            case TestCase::case_4:
-            {
-                const bool         use_on_all_cells = true;
-                const unsigned int mapping_degree   = velocity_degree;
-
-                mapping_pointer =
-                        std::make_unique<MappingQ<dim>>(mapping_degree, use_on_all_cells);
-
-                break;
-            }
-            case TestCase::case_5:
-            {
-                const bool         use_on_all_cells = true;
-                const unsigned int mapping_degree   = velocity_degree;
-
-                mapping_pointer =
-                        std::make_unique<MappingQ<dim>>(mapping_degree, use_on_all_cells);
-
-                break;
-            }
-            case TestCase::case_6:
-            {
-                const bool         use_on_all_cells = true;
-                const unsigned int mapping_degree   = velocity_degree;
-                mapping_pointer =
-                        std::make_unique<MappingQ<dim>>(mapping_degree, use_on_all_cells);
-
-                break;
-            }
-            case TestCase::case_7:
-            {
-                const bool         use_on_all_cells = true;
-                const unsigned int mapping_degree   = velocity_degree;
-
-                mapping_pointer =
-                        std::make_unique<MappingQ<dim>>(mapping_degree, use_on_all_cells);
                 break;
             }
             default:
                 Assert(false, ExcNotImplemented());
         }
-        mapping_collection.push_back(*mapping_pointer);
         mapping_collection.push_back(*mapping_pointer);
         mapping_collection.push_back(*mapping_pointer);
     }
@@ -813,14 +653,6 @@ namespace HP_ALE
     }
 
     template <int dim>
-    bool
-    FluidStructureProblem<dim>::cell_is_in_third_domain(
-            const typename DoFHandler<dim>::cell_iterator &cell)
-    {
-        return (cell->material_id() == third_domain_id);
-    }
-
-    template <int dim>
     void
     FluidStructureProblem<dim>::print_variables()
     {
@@ -839,24 +671,18 @@ namespace HP_ALE
     void
     FluidStructureProblem<dim>::make_grid(const unsigned int n_refinement)
     {
-        // need to change according to the test cases
-
+        TimerOutput::Scope timing_section(computing_timer, "make_grid");
         switch (test_case)
         {
-            case TestCase::case_1:
+            case TestCase::pure:
             {
-                const Point<2> center1(0.4, 0.3);
-                const double   radius1 = 0.3;
-                const Point<2> center2(0.4, 0.2);
-                const double   radius2 = 0.05;
-
+				const Point<2> center1(2, 0.4);
+                
+                const double   radius = std::sqrt(2.) * 0.7;
                 const SphericalManifold<2> manifold1(center1);
-                const SphericalManifold<2> manifold2(center2);
-
                 GridIn<2> gridin;
-                GridOut grid_out;
                 gridin.attach_triangulation(triangulation);
-                std::ifstream f("example.msh");
+                std::ifstream f("/Users/lexlee/Documents/purerigid/case6.msh");
                 gridin.read_msh(f);
 
                 triangulation.reset_all_manifolds();
@@ -871,225 +697,8 @@ namespace HP_ALE
                         {
                             const double distance_from_center1 =
                                     center1.distance(face->vertex(v));
-                            if (std::fabs(distance_from_center1 - radius1) >
-                                1e-5 * radius1)
-                            {
-                                face_at_sphere_boundary = false;
-                            }
-                        }
-                        if (face_at_sphere_boundary)
-                        {
-                            face->set_all_manifold_ids(1);
-                        }
-                    }
-                    for (const auto &face : cell->face_iterators())
-                    {
-                        bool face_at_sphere_boundary = true;
-
-                        for (const auto v : face->vertex_indices())
-                        {
-                            const double distance_from_center2 =
-                                    center2.distance(face->vertex(v));
-                            if (std::fabs(distance_from_center2 - radius2) >
-                                1e-5 * radius2)
-                            {
-                                face_at_sphere_boundary = false;
-                            }
-                        }
-
-                        if (face_at_sphere_boundary)
-                        {
-                            face->set_all_manifold_ids(2);
-                        }
-                    }
-                }
-
-                triangulation.set_manifold (1, manifold1);
-                triangulation.set_manifold (2, manifold2);
-
-                // set material id:
-                for (const auto &cell : dof_handler.active_cell_iterators())
-                {
-                    if (cell->material_id() == 1) {
-                        cell->set_material_id(hydrogel_domain_id);
-                    }
-                    else if (cell->material_id() == 0) {
-                        cell->set_material_id(fluid_domain_id);
-                    }
-                    else {
-                        cell->set_material_id(third_domain_id);
-                    }
-                }
-                triangulation.refine_global(n_refinement);
-                break;
-            }
-            case TestCase::case_2:
-            {
-                GridIn<2> gridin;
-                gridin.attach_triangulation(triangulation);
-                std::ifstream f("/Users/lexlee/Documents/v1.9.5/case2.msh");
-                gridin.read_msh(f);
-
-                // set material id:
-                for (const auto &cell : dof_handler.active_cell_iterators())
-                {
-                    if (cell->material_id() == 1)
-                        cell->set_material_id(hydrogel_domain_id);
-                    else
-                        cell->set_material_id(fluid_domain_id);
-                }
-                triangulation.refine_global(n_refinement);
-                break;
-            }
-            case TestCase::case_3:
-            {
-                const Point<2> center(2., 0.);
-                const double   radius = 0.5;
-                const SphericalManifold<2> manifold(center);
-                GridIn<2> gridin;
-                gridin.attach_triangulation(triangulation);
-                std::ifstream f("case3.msh");
-                gridin.read_msh(f);
-
-                triangulation.reset_all_manifolds();
-                triangulation.set_all_manifold_ids(0);
-
-                for (const auto &cell : triangulation.cell_iterators())
-                {
-                    for (const auto &face : cell->face_iterators())
-                    {
-                        bool face_at_sphere_boundary = true;
-                        for (const auto v : face->vertex_indices())
-                        {
-                            const double distance_from_center =
-                                    center.distance(face->vertex(v));
-                            if (std::fabs(distance_from_center - radius) >
-                                1e-5 * radius)
-                            {
-                                face_at_sphere_boundary = false;
-                            }
-                        }
-                        if (face_at_sphere_boundary)
-                            face->set_all_manifold_ids(1);
-                    }
-                }
-
-                triangulation.set_manifold (1, manifold);
-
-
-                // set material id:
-                for (const auto &cell : dof_handler.active_cell_iterators())
-                {
-                    if (cell->material_id() == 1)
-                        cell->set_material_id(hydrogel_domain_id);
-                    else
-                        cell->set_material_id(fluid_domain_id);
-                }
-                triangulation.refine_global(n_refinement);
-
-
-                break;
-            }
-            case TestCase::case_4:
-            {
-                const double   radius = 0.125;
-                const Point<2> center3(0.375, 0.375);
-                const Point<2> center4(0.625, 0.375);
-                const SphericalManifold<2> manifold3(center3);
-                const SphericalManifold<2> manifold4(center4);
-                GridIn<2> gridin;
-                gridin.attach_triangulation(triangulation);
-                std::ifstream f("case4.msh");
-                gridin.read_msh(f);
-
-                triangulation.reset_all_manifolds();
-                triangulation.set_all_manifold_ids(0);
-
-                for (const auto &cell : triangulation.cell_iterators())
-                {
-                    for (const auto &face : cell->face_iterators())
-                    {
-                        bool face_at_sphere_boundary = true;
-                        for (const auto v : face->vertex_indices())
-                        {
-                            const double distance_from_center3 =
-                                    center3.distance(face->vertex(v));
-
-                            if (std::fabs(distance_from_center3 - radius) >
-                                1e-5 * radius)
-                            {
-                                face_at_sphere_boundary = false;
-                            }
-                        }
-                        if (face_at_sphere_boundary)
-                            face->set_all_manifold_ids(3);
-                    }
-                    for (const auto &face : cell->face_iterators())
-                    {
-                        bool face_at_sphere_boundary = true;
-                        for (const auto v : face->vertex_indices())
-                        {
-                            const double distance_from_center4 =
-                                    center4.distance(face->vertex(v));
-
-                            if (std::fabs(distance_from_center4 - radius) >
-                                1e-5 * radius)
-                            {
-                                face_at_sphere_boundary = false;
-                            }
-                        }
-                        if (face_at_sphere_boundary)
-                            face->set_all_manifold_ids(4);
-                    }
-                }
-                triangulation.set_manifold (3, manifold3);
-                triangulation.set_manifold (4, manifold4);
-
-
-                // set material id:
-                for (const auto &cell : dof_handler.active_cell_iterators())
-                {
-                    if (cell->material_id() == 1)
-                        cell->set_material_id(hydrogel_domain_id);
-                    else
-                        cell->set_material_id(fluid_domain_id);
-                }
-                triangulation.refine_global(n_refinement);
-
-
-                break;
-            }
-            case TestCase::case_5:
-            {
-                const double   radius = 0.125;
-                const Point<2> center1(0.125, 0.125);
-                const Point<2> center2(0.875, 0.125);
-                const Point<2> center3(0.375, 0.375);
-                const Point<2> center4(0.625, 0.375);
-                const SphericalManifold<2> manifold1(center1);
-                const SphericalManifold<2> manifold2(center2);
-                const SphericalManifold<2> manifold3(center3);
-                const SphericalManifold<2> manifold4(center4);
-                GridIn<2> gridin;
-                gridin.attach_triangulation(triangulation);
-                std::ifstream f("case5.msh");
-                gridin.read_msh(f);
-
-                triangulation.reset_all_manifolds();
-                triangulation.set_all_manifold_ids(0);
-
-                for (const auto &cell : triangulation.cell_iterators())
-                {
-                    for (const auto &face : cell->face_iterators())
-                    {
-                        bool face_at_sphere_boundary = true;
-                        for (const auto v : face->vertex_indices())
-                        {
-                            const double distance_from_center1 =
-                                    center1.distance(face->vertex(v));
-
                             if (std::fabs(distance_from_center1 - radius) >
-                                1e-5 * radius)
+                                1e-5 * radius) 
                             {
                                 face_at_sphere_boundary = false;
                             }
@@ -1097,65 +706,10 @@ namespace HP_ALE
                         if (face_at_sphere_boundary)
                             face->set_all_manifold_ids(1);
                     }
-                    for (const auto &face : cell->face_iterators())
-                    {
-                        bool face_at_sphere_boundary = true;
-                        for (const auto v : face->vertex_indices())
-                        {
-                            const double distance_from_center2 =
-                                    center2.distance(face->vertex(v));
 
-                            if (std::fabs(distance_from_center2 - radius) >
-                                1e-5 * radius)
-                            {
-                                face_at_sphere_boundary = false;
-                            }
-                        }
-                        if (face_at_sphere_boundary)
-                            face->set_all_manifold_ids(2);
-                    }
-                    for (const auto &face : cell->face_iterators())
-                    {
-                        bool face_at_sphere_boundary = true;
-                        for (const auto v : face->vertex_indices())
-                        {
-                            const double distance_from_center3 =
-                                    center3.distance(face->vertex(v));
-
-                            if (std::fabs(distance_from_center3 - radius) >
-                                1e-5 * radius)
-                            {
-                                face_at_sphere_boundary = false;
-                            }
-                        }
-                        if (face_at_sphere_boundary)
-                            face->set_all_manifold_ids(3);
-                    }
-                    for (const auto &face : cell->face_iterators())
-                    {
-                        bool face_at_sphere_boundary = true;
-                        for (const auto v : face->vertex_indices())
-                        {
-                            const double distance_from_center4 =
-                                    center4.distance(face->vertex(v));
-
-                            if (std::fabs(distance_from_center4 - radius) >
-                                1e-5 * radius)
-                            {
-                                face_at_sphere_boundary = false;
-                            }
-                        }
-                        if (face_at_sphere_boundary)
-                            face->set_all_manifold_ids(4);
-                    }
                 }
-
                 triangulation.set_manifold (1, manifold1);
-                triangulation.set_manifold (2, manifold2);
-                triangulation.set_manifold (3, manifold3);
-                triangulation.set_manifold (4, manifold4);
-
-
+    
                 // set material id:
                 for (const auto &cell : dof_handler.active_cell_iterators())
                 {
@@ -1165,11 +719,10 @@ namespace HP_ALE
                         cell->set_material_id(fluid_domain_id);
                 }
                 triangulation.refine_global(n_refinement);
-
-
                 break;
             }
-            case TestCase::case_6:
+
+            case TestCase::rigid:
             {
 
                 const Point<2> center1(2, 0.4);
@@ -1180,12 +733,10 @@ namespace HP_ALE
                 const SphericalManifold<2> manifold2(center2);
                 GridIn<2> gridin;
                 gridin.attach_triangulation(triangulation);
-                std::ifstream f("/Users/lexlee/Downloads/thirdphase/case6cell.msh");
+                std::ifstream f("/Users/lexlee/Documents/purerigid/case6rigid.msh");
                 gridin.read_msh(f);
-
                 triangulation.reset_all_manifolds();
                 triangulation.set_all_manifold_ids(0);
-
                 for (const auto &cell : triangulation.cell_iterators())
                 {
                     for (const auto &face : cell->face_iterators())
@@ -1221,38 +772,9 @@ namespace HP_ALE
                         if (face_at_sphere_boundary)
                             face->set_all_manifold_ids(2);
                     }
-
                 }
-
                 triangulation.set_manifold (1, manifold1);
                 triangulation.set_manifold (2, manifold2);
-
-                // set material id:
-                for (const auto &cell : dof_handler.active_cell_iterators())
-                {
-                    if (cell->material_id() == 1)
-                    {
-                        cell->set_material_id(hydrogel_domain_id);
-                    }
-                    else if(cell->material_id() == 0)
-                    {
-                        cell->set_material_id(fluid_domain_id);
-                    }
-                    else
-                        cell->set_material_id(third_domain_id);
-                }
-                triangulation.refine_global(n_refinement);
-
-                break;
-            }
-            case TestCase::case_7:
-            {
-                GridIn<2> gridin;
-                gridin.attach_triangulation(triangulation);
-                std::ifstream f("/home/lexlee/matrixcompare/simplemesh.msh");
-                gridin.read_msh(f);
-
-
                 // set material id:
                 for (const auto &cell : dof_handler.active_cell_iterators())
                 {
@@ -1262,8 +784,6 @@ namespace HP_ALE
                         cell->set_material_id(fluid_domain_id);
                 }
                 triangulation.refine_global(n_refinement);
-
-
                 break;
             }
 
@@ -1300,11 +820,6 @@ namespace HP_ALE
                     cell_hp->set_active_fe_index(1);
                     cell_volume->set_active_fe_index(1);
                 }
-                else if (cell_is_in_third_domain(cell_hp))
-                {
-                    cell_hp->set_active_fe_index(2);
-                    cell_volume->set_active_fe_index(2);
-                }
                 else
                         Assert(false, ExcNotImplemented());
             }
@@ -1315,6 +830,7 @@ namespace HP_ALE
     void
     FluidStructureProblem<dim>::make_boundary_constraints_hp(const IndexSet &hp_relevant_set)
     {
+        TimerOutput::Scope timing_section(computing_timer, "boundary constraints");
         const unsigned int n_components_total = fe_collection.n_components();
         constraints_boundary.clear();
         constraints_hp_nonzero.clear();
@@ -1325,30 +841,43 @@ namespace HP_ALE
                                                 constraints_hp_nonzero);
         switch (test_case)
         {
-            case TestCase::case_1:
+  
+            case TestCase::pure:
             {
                 {
                     // left boundary (id 0):
-                    // stokes_vel(1)=1, stokes_vel(0)=0, displacement(0,1) = 0,0
-                    // component mask for velocity u, stokes_vel(1)=1
-                    ComponentMask stokes_u_component_mask(n_components_total, false);
-                    stokes_u_component_mask.set(
+                    // stokes_vel(0)= parabolic, stokes_vel(1)=0, displacement(0,1) = (0,0)
+                    // component mask for velocity u, stokes_vel(0)  stokes_vel(1)
+                    ComponentMask stokes_v_component_mask(n_components_total, false);
+                    stokes_v_component_mask.set(
+                            extractor_stokes_velocity.first_vector_component, true);
+                    stokes_v_component_mask.set(
                             extractor_stokes_velocity.first_vector_component + 1, true);
-
+                    
                     VectorTools::interpolate_boundary_values(
                             *mapping_pointer,
                             dof_handler,
                             0,
-                            Functions::ConstantFunction<dim>(-1, n_components_total),
+                            ExtensionStokesVelocity<dim>(),
                             constraints_hp_nonzero,
-                            stokes_u_component_mask);
+                            stokes_v_component_mask);
 
-                    // stokes_vel(0)=0, displacement(0) = 0
+                 // newton iteration boundary for v
+                    VectorTools::interpolate_boundary_values(
+                            *mapping_pointer,
+                            dof_handler,
+                            0,
+                            Functions::ZeroFunction<dim>(n_components_total),
+                            constraints_boundary,
+                            stokes_v_component_mask);
+
+                    //displacement(0,1) = 0
                     ComponentMask non_zero_component_mask(n_components_total, false);
-                    non_zero_component_mask.set(
-                            extractor_stokes_velocity.first_vector_component, true);
+
                     non_zero_component_mask.set(
                             extractor_displacement.first_vector_component, true);
+                    non_zero_component_mask.set(
+                            extractor_displacement.first_vector_component + 1, true);
 
                     VectorTools::interpolate_boundary_values(
                             *mapping_pointer,
@@ -1359,340 +888,13 @@ namespace HP_ALE
                             non_zero_component_mask);
 
                     // newton update set to 0 correspondingly
-
-                    // displacement u(0) = 0
-                    ComponentMask zero_component_mask(n_components_total, false);
-                    zero_component_mask.set(
-                            extractor_stokes_velocity.first_vector_component, true);
-                    zero_component_mask.set(
-                            extractor_stokes_velocity.first_vector_component + 1, true);
-                    zero_component_mask.set(
-                            extractor_displacement.first_vector_component, true);
-
-
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            0,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_boundary,
-                            zero_component_mask);
-                }
-                {
-                    // boundary (id 1):
-                    //stokes_vel(0)=0 displacement()
-
-                    ComponentMask non_zero_component_mask(n_components_total, false);
-                    non_zero_component_mask.set(
-                            extractor_stokes_velocity.first_vector_component, true);
-                    non_zero_component_mask.set(
-                            extractor_displacement.first_vector_component, true);
-
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            1,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_hp_nonzero,
-                            non_zero_component_mask);
-
-                    // newton update set to 0 correspondingly
-
-                    // displacement u(0) = 0
-                    ComponentMask zero_component_mask(n_components_total, false);
-
-                    zero_component_mask.set(
-                            extractor_stokes_velocity.first_vector_component, true);
-                    zero_component_mask.set(
-                            extractor_displacement.first_vector_component, true);
-
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            1,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_boundary,
-                            zero_component_mask);
-                }
-
-                {
-                    // boundary (id 2):
-                    //displacement(0)=0 displacement()
-
-                    ComponentMask non_zero_component_mask(n_components_total, false);
-                    non_zero_component_mask.set(
-                            extractor_displacement.first_vector_component, true);
-
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            2,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_hp_nonzero,
-                            non_zero_component_mask);
-
-                    // newton update set to 0 correspondingly
-
-                    // displacement u(0) = 0
+                    // displacement u(0,1) = 0
                     ComponentMask zero_component_mask(n_components_total, false);
                     zero_component_mask.set(
                             extractor_displacement.first_vector_component, true);
-
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            2,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_boundary,
-                            zero_component_mask);
-                }
-
-
-                {
-                    // The middle edge(id = 3):
-                    //  mesh_vel(0,1)=0; (vs)  displacement(1,0)=0  (u)
-                    // hydro_vel(0,1)=0  vf
-
-                    ComponentMask component_mask(n_components_total, false);
-                    component_mask.set(
-                            extractor_displacement.first_vector_component, true);
-                    component_mask.set(
-                            extractor_displacement.first_vector_component+1, true);
-                    component_mask.set(
-                            extractor_hydrogel_velocity.first_vector_component, true);
-                    component_mask.set(
-                            extractor_hydrogel_velocity.first_vector_component + 1, true);
-                    component_mask.set(
-                            extractor_mesh_velocity.first_vector_component, true);
-                    component_mask.set(
-                            extractor_mesh_velocity.first_vector_component + 1, true);
-
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            3,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_hp_nonzero,
-                            component_mask);
-
-                    // newton update set to 0 correspondingly
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            3,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_boundary,
-                            component_mask);
-                }
-                break;
-            } //
-            case TestCase::case_2:
-            {
-                {
-                    // left boundary (id 0):
-                    // stokes_vel(1)=1, stokes_vel(0)=0, displacement(0,1) = 0,0
-                    // component mask for velocity u, stokes_vel(1)=1
-                    ComponentMask stokes_u_component_mask(n_components_total, false);
-                    stokes_u_component_mask.set(
-                            extractor_stokes_velocity.first_vector_component + 1, true);
-
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            0,
-                            Functions::ConstantFunction<dim>(-1, n_components_total),
-                            constraints_hp_nonzero,
-                            stokes_u_component_mask);
-
-                    // stokes_vel(0)=0, displacement(0) = 0
-                    ComponentMask non_zero_component_mask(n_components_total, false);
-                    non_zero_component_mask.set(
-                            extractor_stokes_velocity.first_vector_component, true);
-                    non_zero_component_mask.set(
-                            extractor_displacement.first_vector_component, true);
-
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            0,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_hp_nonzero,
-                            non_zero_component_mask);
-
-                    // newton update set to 0 correspondingly
-
-                    // displacement u(0) = 0
-                    ComponentMask zero_component_mask(n_components_total, false);
                     zero_component_mask.set(
-                            extractor_stokes_velocity.first_vector_component, true);
-                    zero_component_mask.set(
-                            extractor_stokes_velocity.first_vector_component + 1, true);
-                    zero_component_mask.set(
-                            extractor_displacement.first_vector_component, true);
+                            extractor_displacement.first_vector_component + 1, true);
 
-
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            0,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_boundary,
-                            zero_component_mask);
-                }
-                {
-                    // boundary (id 1):
-                    //stokes_vel(0)=0 displacement()
-
-                    ComponentMask non_zero_component_mask(n_components_total, false);
-                    non_zero_component_mask.set(
-                            extractor_stokes_velocity.first_vector_component, true);
-                    non_zero_component_mask.set(
-                            extractor_displacement.first_vector_component, true);
-
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            1,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_hp_nonzero,
-                            non_zero_component_mask);
-
-                    // newton update set to 0 correspondingly
-
-                    // displacement u(0) = 0
-                    ComponentMask zero_component_mask(n_components_total, false);
-
-                    zero_component_mask.set(
-                            extractor_stokes_velocity.first_vector_component, true);
-                    zero_component_mask.set(
-                            extractor_displacement.first_vector_component, true);
-
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            1,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_boundary,
-                            zero_component_mask);
-                }
-
-                {
-                    // boundary (id 2):
-                    //displacement(0)=0 displacement()
-
-                    ComponentMask non_zero_component_mask(n_components_total, false);
-                    non_zero_component_mask.set(
-                            extractor_displacement.first_vector_component, true);
-
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            2,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_hp_nonzero,
-                            non_zero_component_mask);
-
-                    // newton update set to 0 correspondingly
-
-                    // displacement u(0) = 0
-                    ComponentMask zero_component_mask(n_components_total, false);
-                    zero_component_mask.set(
-                            extractor_displacement.first_vector_component, true);
-
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            2,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_boundary,
-                            zero_component_mask);
-                }
-
-
-                {
-                    // The middle edge(id = 3):
-                    //  mesh_vel(0,1)=0; (vs)  displacement(1,0)=0  (u)
-                    // hydro_vel(0,1)=0  vf
-
-                    ComponentMask component_mask(n_components_total, false);
-                    component_mask.set(
-                            extractor_displacement.first_vector_component, true);
-                    component_mask.set(
-                            extractor_displacement.first_vector_component+1, true);
-                    component_mask.set(
-                            extractor_hydrogel_velocity.first_vector_component, true);
-                    component_mask.set(
-                            extractor_hydrogel_velocity.first_vector_component + 1, true);
-                    component_mask.set(
-                            extractor_mesh_velocity.first_vector_component, true);
-                    component_mask.set(
-                            extractor_mesh_velocity.first_vector_component + 1, true);
-
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            3,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_hp_nonzero,
-                            component_mask);
-
-                    // newton update set to 0 correspondingly
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            3,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_boundary,
-                            component_mask);
-                }
-                break;
-            } //
-            case TestCase::case_3:
-            {
-                {
-                    // components: (u,v,w) or (0,1,2)
-
-                    // left boundary (id 0):
-                    // stokes_vel(0)=1, stokes_vel(1)=0, displacement(0) = 0
-
-                    // component mask for velocity u, stokes_vel(0)=1
-                    ComponentMask stokes_u_component_mask(n_components_total, false);
-                    stokes_u_component_mask.set(
-                            extractor_stokes_velocity.first_vector_component, true);
-
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            0,
-                            Functions::ConstantFunction<dim>(1, n_components_total),
-                            constraints_hp_nonzero,
-                            stokes_u_component_mask);
-
-                    // stokes_vel(1)=0, displacement(0) = 0
-                    ComponentMask non_zero_component_mask(n_components_total, false);
-                    non_zero_component_mask.set(
-                            extractor_stokes_velocity.first_vector_component + 1, true);
-                    non_zero_component_mask.set(
-                            extractor_displacement.first_vector_component, true);
-
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            0,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_hp_nonzero,
-                            non_zero_component_mask);
-
-                    // newton update set to 0 correspondingly
-
-                    // displacement u(0) = 0
-                    ComponentMask zero_component_mask(n_components_total, false);
-                    zero_component_mask.set(
-                            extractor_stokes_velocity.first_vector_component, true);
-                    zero_component_mask.set(
-                            extractor_stokes_velocity.first_vector_component + 1, true);
-                    zero_component_mask.set(
-                            extractor_displacement.first_vector_component, true);
 
                     VectorTools::interpolate_boundary_values(
                             *mapping_pointer,
@@ -1720,19 +922,21 @@ namespace HP_ALE
                             fe_collection.component_mask(extractor_displacement));
                 }
                 {
-                    //bottom(id 2) and top(id 3) boundary:
-                    //stokes_vel(1) = 0,
-                    //displacement u(1) = 0,
+                  //no-slip
+                   //stokes_vel(0,1) = 0,  displacement u(0,1) = 0,
                     ComponentMask component_mask(n_components_total, false);
                     component_mask.set(
+                            extractor_stokes_velocity.first_vector_component, true);
+                    component_mask.set(
                             extractor_stokes_velocity.first_vector_component + 1, true);
+                    component_mask.set(extractor_displacement.first_vector_component, true);
                     component_mask.set(extractor_displacement.first_vector_component +
                                        1, true);
 
                     const auto zero_function =
                             Functions::ZeroFunction<dim>(n_components_total);
                     const std::map<types::boundary_id, const Function<dim> *>
-                            function_map = {{2, &zero_function}, {3, &zero_function}};
+                            function_map = {{2, &zero_function} };
                     VectorTools::interpolate_boundary_values(*mapping_pointer,
                                                              dof_handler,
                                                              function_map,
@@ -1744,41 +948,13 @@ namespace HP_ALE
                                                              constraints_boundary,
                                                              component_mask);
                 }
-                {
-                    //bottom (id 2) for hydrogel symmetery
-                    //v_f(1)=0 v_s(1)=0
-                    ComponentMask zero_component_mask(n_components_total, false);
-                    zero_component_mask.set(
-                            extractor_hydrogel_velocity.first_vector_component+1, true);
-                    zero_component_mask.set(
-                            extractor_mesh_velocity.first_vector_component + 1, true);
 
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            2,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_boundary,
-                            zero_component_mask);
-
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            2,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_hp_nonzero,
-                            zero_component_mask);
-                }
                 {
-                    // The middle edge(id = 13):
-                    // stoke_vel(0,1)=0; mesh_vel(0,1)=0; displacement(1,0)=0
-                    // hydro_vel(0,1)=0
-                    // stokes_vel(1)=0, displacement(0) = 0
+                    // The middle edge(id = 3):
+                    //  mesh_vel(0,1)=0; (vs)  displacement(1,0)=0  (u)
+                    // hydro_vel(0,1)=0  vf
+
                     ComponentMask component_mask(n_components_total, false);
-                    component_mask.set(
-                            extractor_stokes_velocity.first_vector_component, true);
-                    component_mask.set(
-                            extractor_stokes_velocity.first_vector_component + 1, true);
                     component_mask.set(
                             extractor_displacement.first_vector_component, true);
                     component_mask.set(
@@ -1795,7 +971,7 @@ namespace HP_ALE
                     VectorTools::interpolate_boundary_values(
                             *mapping_pointer,
                             dof_handler,
-                            13,
+                            3,
                             Functions::ZeroFunction<dim>(n_components_total),
                             constraints_hp_nonzero,
                             component_mask);
@@ -1804,427 +980,14 @@ namespace HP_ALE
                     VectorTools::interpolate_boundary_values(
                             *mapping_pointer,
                             dof_handler,
-                            13,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_boundary,
-                            component_mask);
-                }
-                break;
-            } // c_trap
-            case TestCase::case_4:
-            {
-                {
-                    // components: (u,v,w) or (0,1,2)
-
-                    // left boundary (id 0):
-                    // stokes_vel(0)=1, stokes_vel(1)=0, displacement(0) = 0
-
-                    // component mask for velocity u, stokes_vel(0)=1
-                    ComponentMask stokes_u_component_mask(n_components_total, false);
-                    stokes_u_component_mask.set(
-                            extractor_stokes_velocity.first_vector_component, true);
-
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            0,
-                            Functions::ConstantFunction<dim>(-1, n_components_total),
-                            constraints_hp_nonzero,
-                            stokes_u_component_mask);
-
-                    // stokes_vel(1)=0, displacement(0) = 0
-                    ComponentMask non_zero_component_mask(n_components_total, false);
-                    non_zero_component_mask.set(
-                            extractor_stokes_velocity.first_vector_component + 1, true);
-                    non_zero_component_mask.set(
-                            extractor_displacement.first_vector_component, true);
-
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            0,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_hp_nonzero,
-                            non_zero_component_mask);
-
-                    // newton update set to 0 correspondingly
-
-                    // displacement u(0) = 0
-                    ComponentMask zero_component_mask(n_components_total, false);
-                    zero_component_mask.set(
-                            extractor_stokes_velocity.first_vector_component, true);
-                    zero_component_mask.set(
-                            extractor_stokes_velocity.first_vector_component + 1, true);
-                    zero_component_mask.set(
-                            extractor_displacement.first_vector_component, true);
-
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            0,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_boundary,
-                            zero_component_mask);
-                }
-
-
-                {
-
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            1,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_boundary,
-                            fe_collection.component_mask(extractor_displacement));
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            1,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_hp_nonzero,
-                            fe_collection.component_mask(extractor_displacement));
-                }
-
-
-
-                {
-
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            2,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_boundary,
-                            fe_collection.component_mask(extractor_displacement));
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            2,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_hp_nonzero,
-                            fe_collection.component_mask(extractor_displacement));
-                }
-
-                {
-                    ComponentMask zero_component_mask(n_components_total, false);
-                    zero_component_mask.set(
-                            extractor_stokes_velocity.first_vector_component, true);
-
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            2,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_boundary,
-                            zero_component_mask);
-
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            2,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_hp_nonzero,
-                            zero_component_mask);
-                }
-
-                {
-                    // right boundary (id 1): displacement(0,1) = 0
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
                             3,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_boundary,
-                            fe_collection.component_mask(extractor_displacement));
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            3,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_hp_nonzero,
-                            fe_collection.component_mask(extractor_displacement));
-                }
-
-                {
-                    ComponentMask zero_component_mask(n_components_total, false);
-                    zero_component_mask.set(
-                            extractor_stokes_velocity.first_vector_component + 1, true);
-
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            3,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_boundary,
-                            zero_component_mask);
-
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            3,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_hp_nonzero,
-                            zero_component_mask);
-                }
-
-                {
-                    // The middle edge(id = 13):
-                    // stoke_vel(0,1)=0; mesh_vel(0,1)=0; displacement(1,0)=0
-                    // hydro_vel(0,1)=0
-                    // stokes_vel(1)=0, displacement(0) = 0
-                    ComponentMask component_mask(n_components_total, false);
-                    component_mask.set(
-                            extractor_stokes_velocity.first_vector_component, true);
-                    component_mask.set(
-                            extractor_stokes_velocity.first_vector_component + 1, true);
-                    component_mask.set(
-                            extractor_displacement.first_vector_component, true);
-                    component_mask.set(
-                            extractor_displacement.first_vector_component+1, true);
-                    component_mask.set(
-                            extractor_hydrogel_velocity.first_vector_component, true);
-                    component_mask.set(
-                            extractor_hydrogel_velocity.first_vector_component + 1, true);
-                    component_mask.set(
-                            extractor_mesh_velocity.first_vector_component, true);
-                    component_mask.set(
-                            extractor_mesh_velocity.first_vector_component + 1, true);
-
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            4,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_hp_nonzero,
-                            component_mask);
-
-                    // newton update set to 0 correspondingly
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            4,
                             Functions::ZeroFunction<dim>(n_components_total),
                             constraints_boundary,
                             component_mask);
                 }
                 break;
-            }
-            case TestCase::case_5:
-            {
-                {
-                    // components: (u,v,w) or (0,1,2)
-
-                    // left boundary (id 0):
-                    // stokes_vel(0)=1, stokes_vel(1)=0, displacement(0) = 0
-
-                    // component mask for velocity u, stokes_vel(0)=1
-                    ComponentMask stokes_u_component_mask(n_components_total, false);
-                    stokes_u_component_mask.set(
-                            extractor_stokes_velocity.first_vector_component, true);
-
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            0,
-                            Functions::ConstantFunction<dim>(-1, n_components_total),
-                            constraints_hp_nonzero,
-                            stokes_u_component_mask);
-
-                    // stokes_vel(1)=0, displacement(0) = 0
-                    ComponentMask non_zero_component_mask(n_components_total, false);
-                    non_zero_component_mask.set(
-                            extractor_stokes_velocity.first_vector_component + 1, true);
-                    non_zero_component_mask.set(
-                            extractor_displacement.first_vector_component, true);
-
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            0,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_hp_nonzero,
-                            non_zero_component_mask);
-
-                    // newton update set to 0 correspondingly
-
-                    // displacement u(0) = 0
-                    ComponentMask zero_component_mask(n_components_total, false);
-                    zero_component_mask.set(
-                            extractor_stokes_velocity.first_vector_component, true);
-                    zero_component_mask.set(
-                            extractor_stokes_velocity.first_vector_component + 1, true);
-                    zero_component_mask.set(
-                            extractor_displacement.first_vector_component, true);
-
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            0,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_boundary,
-                            zero_component_mask);
-                }
-                {
-                    // components: (u,v,w) or (0,1,2)
-
-                    // left boundary (id 0):
-                    // stokes_vel(0)=1, stokes_vel(1)=0, displacement(0) = 0
-
-                    // component mask for velocity u, stokes_vel(0)=1
-                    ComponentMask stokes_u_component_mask(n_components_total, false);
-                    stokes_u_component_mask.set(
-                            extractor_stokes_velocity.first_vector_component, true);
-
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            1,
-                            Functions::ConstantFunction<dim>(-0.5, n_components_total),
-                            constraints_hp_nonzero,
-                            stokes_u_component_mask);
-
-                    // stokes_vel(1)=0, displacement(0) = 0
-                    ComponentMask non_zero_component_mask(n_components_total, false);
-                    non_zero_component_mask.set(
-                            extractor_stokes_velocity.first_vector_component + 1, true);
-                    non_zero_component_mask.set(
-                            extractor_displacement.first_vector_component, true);
-
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            1,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_hp_nonzero,
-                            non_zero_component_mask);
-
-                    // newton update set to 0 correspondingly
-
-                    // displacement u(0) = 0
-                    ComponentMask zero_component_mask(n_components_total, false);
-                    zero_component_mask.set(
-                            extractor_stokes_velocity.first_vector_component, true);
-                    zero_component_mask.set(
-                            extractor_stokes_velocity.first_vector_component + 1, true);
-                    zero_component_mask.set(
-                            extractor_displacement.first_vector_component, true);
-
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            1,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_boundary,
-                            zero_component_mask);
-                }
-
-                {
-                    // right boundary (id 1): displacement(0,1) = 0
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            2,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_boundary,
-                            fe_collection.component_mask(extractor_displacement));
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            2,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_hp_nonzero,
-                            fe_collection.component_mask(extractor_displacement));
-                }
-
-                {
-                    ComponentMask zero_component_mask(n_components_total, false);
-                    zero_component_mask.set(
-                            extractor_stokes_velocity.first_vector_component, true);
-
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            2,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_boundary,
-                            zero_component_mask);
-
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            2,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_hp_nonzero,
-                            zero_component_mask);
-                }
-
-
-
-                {
-                    // right boundary (id 1): displacement(0,1) = 0
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            3,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_boundary,
-                            fe_collection.component_mask(extractor_displacement));
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            3,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_hp_nonzero,
-                            fe_collection.component_mask(extractor_displacement));
-                }
-
-
-
-
-                {
-                    // The middle edge(id = 13):
-                    // stoke_vel(0,1)=0; mesh_vel(0,1)=0; displacement(1,0)=0
-                    // hydro_vel(0,1)=0
-                    // stokes_vel(1)=0, displacement(0) = 0
-                    ComponentMask component_mask(n_components_total, false);
-                    component_mask.set(
-                            extractor_stokes_velocity.first_vector_component, true);
-                    component_mask.set(
-                            extractor_stokes_velocity.first_vector_component + 1, true);
-                    component_mask.set(
-                            extractor_displacement.first_vector_component, true);
-                    component_mask.set(
-                            extractor_displacement.first_vector_component+1, true);
-                    component_mask.set(
-                            extractor_hydrogel_velocity.first_vector_component, true);
-                    component_mask.set(
-                            extractor_hydrogel_velocity.first_vector_component + 1, true);
-                    component_mask.set(
-                            extractor_mesh_velocity.first_vector_component, true);
-                    component_mask.set(
-                            extractor_mesh_velocity.first_vector_component + 1, true);
-
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            4,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_hp_nonzero,
-                            component_mask);
-
-                    // newton update set to 0 correspondingly
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            4,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_boundary,
-                            component_mask);
-                }
-                break;
-            }
-            case TestCase::case_6:
+            } //
+            case TestCase::rigid:
             {
                 {
                     // left boundary (id 0):
@@ -2304,35 +1067,8 @@ namespace HP_ALE
                             fe_collection.component_mask(extractor_displacement));
                 }
                 {
-                    //free-slip
-                    //stokes_vel(1) = 0,
-                    //displacement u(1) = 0,
-
-                    /*ComponentMask component_mask(n_components_total, false);
-                    component_mask.set(
-                            extractor_stokes_velocity.first_vector_component + 1, true);
-                    component_mask.set(extractor_displacement.first_vector_component +
-                                       1, true);
-
-                    const auto zero_function =
-                            Functions::ZeroFunction<dim>(n_components_total);
-                    const std::map<types::boundary_id, const Function<dim> *>
-                            function_map = {{2, &zero_function} };
-                    VectorTools::interpolate_boundary_values(*mapping_pointer,
-                                                             dof_handler,
-                                                             function_map,
-                                                             constraints_hp_nonzero,
-                                                             component_mask);
-                    VectorTools::interpolate_boundary_values(*mapping_pointer,
-                                                             dof_handler,
-                                                             function_map,
-                                                             constraints_boundary,
-                                                             component_mask);*/
-
-
                     //no-slip
-                    //stokes_vel(0,1) = 0,
-                    //displacement u(0,1) = 0,
+                    //stokes_vel(0,1) = 0, displacement u(0,1) = 0,
                     ComponentMask component_mask(n_components_total, false);
                     component_mask.set(
                             extractor_stokes_velocity.first_vector_component, true);
@@ -2356,176 +1092,11 @@ namespace HP_ALE
                                                              function_map,
                                                              constraints_boundary,
                                                              component_mask);
-
-
                 }
-
                 {
                     // The middle edge(id = 3):
                     //  mesh_vel(0,1)=0; (vs)  displacement(1,0)=0  (u)
                     // hydro_vel(0,1)=0  vf
-
-                    ComponentMask component_mask(n_components_total, false);
-                    component_mask.set(
-                            extractor_displacement.first_vector_component, true);
-                    component_mask.set(
-                            extractor_displacement.first_vector_component+1, true);
-                    component_mask.set(
-                            extractor_hydrogel_velocity.first_vector_component, true);
-                    component_mask.set(
-                            extractor_hydrogel_velocity.first_vector_component + 1, true);
-                    component_mask.set(
-                            extractor_mesh_velocity.first_vector_component, true);
-                    component_mask.set(
-                            extractor_mesh_velocity.first_vector_component + 1, true);
-
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            3,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_hp_nonzero,
-                            component_mask);
-
-                    // newton update set to 0 correspondingly
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            3,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_boundary,
-                            component_mask);
-                }
-                break;
-            } //
-            case TestCase::case_7:
-            {
-                {
-                    // left boundary (id 0):
-                    // stokes_vel(1)=1, stokes_vel(0)=0, displacement(0,1) = 0,0
-                    // component mask for velocity u, stokes_vel(1)=1
-                    ComponentMask stokes_u_component_mask(n_components_total, false);
-                    stokes_u_component_mask.set(
-                            extractor_stokes_velocity.first_vector_component + 1, true);
-
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            0,
-                            Functions::ConstantFunction<dim>(-1, n_components_total),
-                            constraints_hp_nonzero,
-                            stokes_u_component_mask);
-
-                    // stokes_vel(0)=0, displacement(0) = 0
-                    ComponentMask non_zero_component_mask(n_components_total, false);
-                    non_zero_component_mask.set(
-                            extractor_stokes_velocity.first_vector_component, true);
-                    non_zero_component_mask.set(
-                            extractor_displacement.first_vector_component, true);
-
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            0,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_hp_nonzero,
-                            non_zero_component_mask);
-
-                    // newton update set to 0 correspondingly
-
-                    // displacement u(0) = 0
-                    ComponentMask zero_component_mask(n_components_total, false);
-                    zero_component_mask.set(
-                            extractor_stokes_velocity.first_vector_component, true);
-                    zero_component_mask.set(
-                            extractor_stokes_velocity.first_vector_component + 1, true);
-                    zero_component_mask.set(
-                            extractor_displacement.first_vector_component, true);
-
-
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            0,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_boundary,
-                            zero_component_mask);
-                }
-                {
-                    // boundary (id 1):
-                    //stokes_vel(0)=0 displacement()
-
-                    ComponentMask non_zero_component_mask(n_components_total, false);
-                    non_zero_component_mask.set(
-                            extractor_stokes_velocity.first_vector_component, true);
-                    non_zero_component_mask.set(
-                            extractor_displacement.first_vector_component, true);
-
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            1,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_hp_nonzero,
-                            non_zero_component_mask);
-
-                    // newton update set to 0 correspondingly
-
-                    // displacement u(0) = 0
-                    ComponentMask zero_component_mask(n_components_total, false);
-
-                    zero_component_mask.set(
-                            extractor_stokes_velocity.first_vector_component, true);
-                    zero_component_mask.set(
-                            extractor_displacement.first_vector_component, true);
-
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            1,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_boundary,
-                            zero_component_mask);
-                }
-
-                {
-                    // boundary (id 2):
-                    //displacement(0)=0 displacement()
-
-                    ComponentMask non_zero_component_mask(n_components_total, false);
-                    non_zero_component_mask.set(
-                            extractor_displacement.first_vector_component, true);
-
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            2,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_hp_nonzero,
-                            non_zero_component_mask);
-
-                    // newton update set to 0 correspondingly
-
-                    // displacement u(0) = 0
-                    ComponentMask zero_component_mask(n_components_total, false);
-                    zero_component_mask.set(
-                            extractor_displacement.first_vector_component, true);
-
-                    VectorTools::interpolate_boundary_values(
-                            *mapping_pointer,
-                            dof_handler,
-                            2,
-                            Functions::ZeroFunction<dim>(n_components_total),
-                            constraints_boundary,
-                            zero_component_mask);
-                }
-
-
-                {
-                    // The middle edge(id = 3):
-                    //  mesh_vel(0,1)=0; (vs)  displacement(1,0)=0  (u)
-                    // hydro_vel(0,1)=0  vf
-
                     ComponentMask component_mask(n_components_total, false);
                     component_mask.set(
                             extractor_displacement.first_vector_component, true);
@@ -2570,6 +1141,8 @@ namespace HP_ALE
     void
     FluidStructureProblem<dim>::setup_dofs()
     {
+        TimerOutput::Scope timing_section(computing_timer, "setup_dofs");
+        GridTools::partition_triangulation(n_mpi_processes, triangulation);
         const unsigned int n_components_total = fe_collection.n_components();
         set_active_fe_indices();
         {
@@ -2600,9 +1173,9 @@ namespace HP_ALE
 
             volume_system_matrix.reinit(sp);
             volume_system_rhs.reinit(volume_locally_owned_dofs,
-                    //volume_locally_relevant_dofs,
+                                     //volume_locally_relevant_dofs,
                                      MPI_COMM_WORLD);
-            //false);
+                                     //false);
 
             //volume constraints
             volume_solution.reinit(volume_locally_relevant_dofs,
@@ -2632,19 +1205,32 @@ namespace HP_ALE
                 const unsigned int n_stress_components = 6;
                 stress_f.resize(n_stress_components);
                 for(unsigned int d = 0; d < n_stress_components; ++d)
-                    stress_f[d].reinit(volume_dof_handler.n_dofs());
+                {
+                    //stress_f[d].reinit(volume_dof_handler.n_dofs());
+                    stress_f[d].reinit(volume_locally_owned_dofs, MPI_COMM_WORLD);
+                }
+
+
             }
             {
                 const unsigned int n_stress_components = 6;
                 stress_s.resize(n_stress_components);
                 for(unsigned int d = 0; d < n_stress_components; ++d)
-                    stress_s[d].reinit(volume_dof_handler.n_dofs());
+                {
+                    //stress_s[d].reinit(volume_dof_handler.n_dofs());
+                    stress_s[d].reinit(volume_locally_owned_dofs, MPI_COMM_WORLD);
+                }
+
             }
             {
                 const unsigned int n_stress_components = 6;
                 strain.resize(n_stress_components);
                 for(unsigned int d = 0; d < n_stress_components; ++d)
-                    strain[d].reinit(volume_dof_handler.n_dofs());
+                {
+                    //strain[d].reinit(volume_dof_handler.n_dofs());
+                    strain[d].reinit(volume_locally_owned_dofs, MPI_COMM_WORLD);
+                }
+
             }
         }
 
@@ -2832,7 +1418,7 @@ namespace HP_ALE
     FluidStructureProblem<dim>::setup_hp_sparse_matrix(const IndexSet &hp_index_set,
                                                        const IndexSet &hp_relevant_set)
     {
-
+        TimerOutput::Scope timing_section(computing_timer, "setup_hp_sparse_matrix");
         Table<2, DoFTools::Coupling> cell_coupling, face_coupling;
         const bool print_coupling_pattern = false;
         make_coupling(cell_coupling, face_coupling, print_coupling_pattern);
@@ -2893,6 +1479,7 @@ namespace HP_ALE
             const std::vector<Point<dim>> &            fsp,
             AffineConstraints<double> &                constraints_flux)
     {
+        TimerOutput::Scope timing_section(computing_timer, "add constraints");
         const uint dofs_per_face = fe.dofs_per_face;
         std::vector<std::pair<types::global_dof_index, double>> col_vals_pair;
         for (unsigned int i = 0; i < dofs_per_face; ++i)
@@ -2916,44 +1503,17 @@ namespace HP_ALE
 
     template <int dim>
     void
-    FluidStructureProblem<dim>::add_interface2_constraints(
-            const FESystem<dim> &                      fe,
-            const types::global_dof_index              row, // add_line row
-            const std::vector<types::global_dof_index> cols,
-            const uint                                 line_comp, // comp of add_line
-            const uint                                 starting_comp,
-            const uint                                 num_comp, // number of comp (dim)
-            const Point<dim> &                         gsp,
-            const std::vector<Point<dim>> &            fsp,
-            AffineConstraints<double> &                constraints_flux2)
-    {
-        const uint dofs_per_face = fe.dofs_per_face;
-        std::vector<std::pair<types::global_dof_index, double>> col_vals_pair;
-        for (unsigned int i = 0; i < dofs_per_face; ++i)
-        {
-            const unsigned int comp = fe.face_system_to_component_index(i).first;
-            if (cols[i] != row && comp >= starting_comp &&
-                comp < starting_comp + num_comp && gsp.distance(fsp[i]) < 1e-10)
-            {
-                const double entry = 1.0;
-                col_vals_pair.emplace_back(cols[i], entry);
-                constrainted_flag2[cols[i]] = true;
-#if 0
-                pcout << " constraint(" << row << "," << cols[i] << ")=" << entry
-                << std::endl;
-#endif
-            }
-        }
-        constraints_flux2.add_entries(row, col_vals_pair);
-    }
-
-    template <int dim>
-    void
     FluidStructureProblem<dim>::set_interface_dofs_flag(
-            std::vector<unsigned int> &flag)
+            TrilinosWrappers::MPI::Vector &flag, const IndexSet &hp_index_set)
     {
         flag.clear();
-        flag.resize(dof_handler.n_locally_owned_dofs(), 1);
+        flag.reinit(hp_index_set, MPI_COMM_WORLD);
+        for (auto it = flag.begin(); it != flag.end();
+             ++it)
+        {
+            *it = 1;
+        }
+
         const unsigned int hydrogel_dofs_per_cell = hydrogel_fe.dofs_per_cell;
         for (const auto &cell : dof_handler.active_cell_iterators())
             if (cell->is_locally_owned())
@@ -2976,6 +1536,7 @@ namespace HP_ALE
     FluidStructureProblem<dim>::make_flux_constraints(
             AffineConstraints<double> &constraints_flux)
     {
+        TimerOutput::Scope timing_section(computing_timer, "make flux constraints");
         const auto &sfe =
                 stokes_fe.get_sub_fe(extractor_stokes_velocity.first_vector_component, 1);
         const auto &generalized_unit_face_support_points =
@@ -3021,9 +1582,9 @@ namespace HP_ALE
             if (cell->is_locally_owned())
             {
                 if (cell_is_in_fluid_domain(cell))
-                {
+                    /*for (unsigned int f = 0; f < GeometryInfo<dim>::faces_per_cell;
+                         ++f) // f : face #*/
                     for (const auto &f : cell->face_indices())
-                    {
                         if (!cell->at_boundary(f))
                         {
                             bool face_is_on_interface = false;
@@ -3228,196 +1789,9 @@ namespace HP_ALE
                                 } // q loop
                             }
                         }
-                    }
-                }
             }
+
     }
-
-    template <int dim>
-    void
-    FluidStructureProblem<dim>::make_flux2_constraints(
-            AffineConstraints<double> &constraints_flux2)
-    {
-        const auto &hyfe =
-                hydrogel_fe.get_sub_fe(extractor_hydrogel_velocity.first_vector_component, 1);
-
-        const auto &generalized_unit_face_support_points =
-                hyfe.get_unit_face_support_points();
-
-        const Quadrature<dim - 1> hy_q(generalized_unit_face_support_points);
-
-        constrainted_flag2.clear();
-        constrainted_flag2.resize(dof_handler.n_locally_owned_dofs(), false);
-
-        FEFaceValues<dim>   hydrogel_fe_face_values(*mapping_pointer,
-                                                    hydrogel_fe,
-                                                    hy_q,
-                                                    update_quadrature_points |
-                                                    update_values);
-
-        FEFaceValues<dim>   third_fe_face_values(*mapping_pointer,
-                                                    third_fe,
-                                                    hy_q,
-                                                    update_quadrature_points |
-                                                    update_values);
-
-        const uint          n_q_face = hy_q.size();// unit face support point size
-        const auto          hy_dofs_per_face = hydrogel_fe.dofs_per_face;//per face dofs not global
-        const auto          th_dofs_per_face = third_fe.dofs_per_face;
-
-        std::vector<types::global_dof_index> hydrogel_face_dof_indices(
-                hy_dofs_per_face); //local dof response to global dof
-        std::vector<types::global_dof_index> third_face_dof_indices(
-                th_dofs_per_face); //local dof response to global dof
-
-        for (const auto &cell : dof_handler.active_cell_iterators())
-            if (cell->is_locally_owned())
-            {
-                if (cell_is_in_hydrogel_domain(cell))
-                {
-                    for (const auto &f : cell->face_indices())
-                    {
-                        if (!cell->at_boundary(f))
-                        {
-                            bool face_is_on_interface2 = false;
-                            if ((cell->neighbor(f)->has_children() == false) &&
-                                (cell_is_in_third_domain(cell->neighbor(f))))
-                                face_is_on_interface2 = true;
-                            else if (cell->neighbor(f)->has_children() == true)
-                            {
-                                for (unsigned int sf = 0; sf < cell->face(f)->n_children();
-                                     ++sf)
-                                    if (cell_is_in_third_domain(
-                                            cell->neighbor_child_on_subface(f, sf)))
-                                    {
-                                        face_is_on_interface2 = true;
-                                        break;
-                                    }
-                            }
-                            if (face_is_on_interface2)
-                            {
-                                const auto nbr_face_no = cell->neighbor_of_neighbor(f);
-                                hydrogel_fe_face_values.reinit(cell, f);
-
-                                const auto &neighbor = cell->neighbor(f);
-                                third_fe_face_values.reinit(neighbor, nbr_face_no);
-
-
-                                const std::vector<Point<dim - 1>>
-                                        &hydrogel_unit_support_points =
-                                        hydrogel_fe.get_unit_face_support_points();
-                                const std::vector<Point<dim - 1>>
-                                        &third_unit_support_points =
-                                        third_fe.get_unit_face_support_points();
-
-                                const std::vector<Point<dim>> &hydrogel_physical_face_points =
-                                        get_physical_face_points(cell,
-                                                                 f,
-                                                                 hydrogel_unit_support_points);
-                                const std::vector<Point<dim>> &third_physical_face_points =
-                                        get_physical_face_points(neighbor,
-                                                                 nbr_face_no,
-                                                                 third_unit_support_points);
-                                const std::vector<Point<dim>> &
-                                        generalized_physical_face_points = get_physical_face_points(
-                                                cell, f, generalized_unit_face_support_points);
-                                neighbor->face(cell->neighbor_of_neighbor(f))
-                                        ->get_dof_indices(third_face_dof_indices, 2);
-                                cell->face(f)->get_dof_indices(hydrogel_face_dof_indices, 1);
-
-                               for (unsigned int k = 0;
-                                     k < generalized_unit_face_support_points.size();
-                                     ++k)
-                                {
-                                    unsigned int   comp = 0;
-                                    bool         add_entries = false;
-                                    unsigned int add_line_id = hy_dofs_per_face;
-                                    for (unsigned int i = 0; i < hy_dofs_per_face; ++i)
-                                    {
-                                        if ( hydrogel_fe.face_system_to_component_index(i)
-                                                     .first == extractor_mesh_velocity
-                                                     .first_vector_component  &&
-                                             generalized_physical_face_points[k].distance(
-                                                     third_physical_face_points[i]) < 1e-10)
-                                        {
-                                            if (!constrainted_flag2
-                                            [hydrogel_face_dof_indices[i]])
-                                            {
-                                                constraints_flux2.add_line(
-                                                 hydrogel_face_dof_indices[i]);
-                                                add_line_id = i;
-                                                add_entries = true;
-                                                constrainted_flag2
-                                                [hydrogel_face_dof_indices[add_line_id]] =
-                                                        true;
-                                                break;
-                                            }
-
-                                        }
-                                    }
-                                    if (add_entries)
-                                    {
-                                        add_interface2_constraints(
-                                                hydrogel_fe,
-                                                hydrogel_face_dof_indices[add_line_id],
-                                                hydrogel_face_dof_indices,
-                                                comp,
-                                                extractor_hydrogel_velocity.first_vector_component,
-                                                dim - 1,
-                                                generalized_physical_face_points[k],
-                                                hydrogel_physical_face_points,
-                                                constraints_flux2);
-                                    }
-
-
-                                    unsigned int   comp2 = 1;
-                                    bool         add_entry2 = false;
-                                    unsigned int add_line_id2 = hy_dofs_per_face;
-                                    for (unsigned int i = 0; i < hy_dofs_per_face; ++i)
-                                    {
-                                        if ( hydrogel_fe.face_system_to_component_index(i)
-                                                     .first == comp2 + extractor_mesh_velocity
-                                                     .first_vector_component  &&
-                                             generalized_physical_face_points[k].distance(
-                                                     third_physical_face_points[i]) < 1e-10)
-                                        {
-                                            if (!constrainted_flag2
-                                            [hydrogel_face_dof_indices[i]])
-                                            {
-                                                constraints_flux2.add_line(
-                                                        hydrogel_face_dof_indices[i]);
-                                                add_line_id2 = i;
-                                                add_entry2 = true;
-                                                constrainted_flag2
-                                                [hydrogel_face_dof_indices[add_line_id2]] =
-                                                        true;
-                                                break;
-                                            }
-
-                                        }
-                                    }
-                                    if (add_entry2)
-                                    {
-                                        add_interface2_constraints(
-                                                hydrogel_fe,
-                                                hydrogel_face_dof_indices[add_line_id2],
-                                                hydrogel_face_dof_indices,
-                                                comp2,
-                                                comp2 + extractor_hydrogel_velocity.first_vector_component,
-                                                dim - 1,
-                                                generalized_physical_face_points[k],
-                                                hydrogel_physical_face_points,
-                                                constraints_flux2);
-                                    }
-
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-    }
-
 
     template <int dim>
     void
@@ -3447,41 +1821,32 @@ namespace HP_ALE
         {
             scratch.hp_fe_values.reinit(cell_hp);
             scratch.volume_fe_values.reinit(cell_volume);
-
             const FEValues<dim> &fe_values =
                     scratch.hp_fe_values.get_present_fe_values();
             const FEValues<dim> &volume_fe_values =
                     scratch.volume_fe_values.get_present_fe_values();
-
             const unsigned int n_q_points    = volume_fe_values.n_quadrature_points;
             const unsigned int dofs_per_cell = cell_volume->get_fe().dofs_per_cell;
-
             copy_data.volume_cell_matrix.reinit(dofs_per_cell, dofs_per_cell);
             copy_data.volume_cell_rhs.reinit(dofs_per_cell);
             copy_data.volume_local_dof_indices.resize(dofs_per_cell);
             cell_volume->get_dof_indices(copy_data.volume_local_dof_indices);
-
             // declaring all test functions
             // volume
             std::vector<double> psi_phi_s(dofs_per_cell); // \psi_{\phi_s}
-
             SymmetricTensor<2, dim> identity_tensor; // identity tensor
             for (unsigned int d = 0; d < dim; ++d)
                 identity_tensor[d][d] = 1.;
-
             Assert(dofs_per_cell == volume_fe.dofs_per_cell, ExcInternalError());
             // grad u(gradients of mesh displacement)
             std::vector<Tensor<2, dim>> grad_u(n_q_points);
             fe_values[extractor_displacement].get_function_gradients(solution,
                                                                      grad_u);
-
             // grad vs (mesh velocity)
             std::vector<Tensor<2, dim>> grad_vs(n_q_points);
             fe_values[extractor_mesh_velocity].get_function_gradients(solution,
                                                                       grad_vs);
-
             std::vector<double> volume_shape_values(n_q_points);
-
             for (unsigned int q = 0; q < n_q_points; ++q)
             {
                 // compute F an J
@@ -3489,41 +1854,29 @@ namespace HP_ALE
                 deformation_F += grad_u[q];                               // F
                 const double jacobian = determinant(deformation_F);       // J
                 const auto   inv_F_T  = transpose(invert(deformation_F)); // F^{-T}
-
                 // assemble local rhs
                 double tmp_rhs, tmp_mat;
-
                 for (unsigned int i = 0; i < dofs_per_cell; ++i)
                 {
                     volume_shape_values[i] = volume_fe_values.shape_value(i, q);
-
                     // Sigma^star F_hat_inv_transpose_star J_hat_star
                     tmp_rhs = 0.;
-
                      //div(F_hat_inv . v_s J_hat)
                      //= J_hat F_hat_inv : grad_hat(v_s)
                     tmp_rhs += jacobian * scalar_product(inv_F_T, grad_vs[q]) *
                     volume_shape_values[i];
-                    /*tmp_rhs += phi_s0 / jacobian *
-                               volume_shape_values[i];*/
-
                     // no need to change this, pay attention to the negative sign
                     copy_data.volume_cell_rhs(i) -=
                             volume_fe_values.JxW(q) * tmp_rhs;
                 }
 
                 // assemble local matrix
-
                 for (unsigned int i = 0; i < dofs_per_cell; ++i)
                     for (unsigned int j = 0; j < dofs_per_cell; ++j)
                     {
                         tmp_mat = 0.;
-
                          tmp_mat += jacobian / time_step * volume_shape_values[j] *
                                 volume_shape_values[i];
-                       /* tmp_mat += volume_shape_values[j] *
-                                   volume_shape_values[i];*/
-
                         // add all the other terms here using the same format
                         // no need to change this
                         copy_data.volume_cell_matrix(i, j) +=
@@ -3551,6 +1904,7 @@ namespace HP_ALE
     void
     FluidStructureProblem<dim>::assemble_volume_system_workstream()
     {
+        TimerOutput::Scope timing_section(computing_timer, "assemble volume system");
         pcout << " assembling volume...";
         volume_system_matrix = 0;
         volume_system_rhs    = 0;
@@ -3560,9 +1914,7 @@ namespace HP_ALE
         const QGauss<dim> quadrature_formula(2 + volume_degree);
         // same quadrature for all
         const hp::QCollection<dim> q_collection{quadrature_formula,
-                                                quadrature_formula,
-                                                quadrature_formula
-                                                };
+                                                quadrature_formula};
         const QGauss<dim - 1>      face_quadrature_formula(2 + volume_degree);
 
         const UpdateFlags          hp_update_flags =
@@ -3576,7 +1928,6 @@ namespace HP_ALE
                        mapping_collection,
                        stokes_fe,
                        hydrogel_fe,
-                       third_fe,
                        volume_fe,
                        q_collection,
                        q_collection,
@@ -3586,15 +1937,14 @@ namespace HP_ALE
                        face_update_flags);
 
         PerTaskData cp;
-
         auto worker =
-                [=](const typename DoFHandler<dim>::active_cell_iterator &cell,
+                [this](const typename DoFHandler<dim>::active_cell_iterator &cell,
                        ScratchData &                                         scratch,
                        PerTaskData &                                         copy_data) {
-                    local_assemble_volume(cell, scratch, copy_data);
+                    this->local_assemble_volume(cell, scratch, copy_data);
                 };
-        auto copier = [=](const PerTaskData &copy_data) {
-            copy_local_to_global_volume(copy_data);
+        auto copier = [this](const PerTaskData &copy_data) {
+            this->copy_local_to_global_volume(copy_data);
         };
 
         WorkStream::run(CellFilter(IteratorFilters::LocallyOwnedCell(),
@@ -3622,11 +1972,8 @@ namespace HP_ALE
     void
     FluidStructureProblem<dim>::solve_volume()
     {
+        TimerOutput::Scope timing_section(computing_timer, "solve volume");
         pcout << " solving volume..." << std::endl;
-        /*SolverControl                    solver_control;
-        TrilinosWrappers::SolverDirect::AdditionalData data(false, "Amesos_Mumps");
-        TrilinosWrappers::SolverDirect solver(solver_control, data);
-        solver.solve(volume_system_matrix, dis_volume_solution, volume_system_rhs);*/
         solver(volume_system_matrix, dis_volume_solution, volume_system_rhs);
         auto it_old = dis_volume_old_solution.begin();
         for (auto it = dis_volume_solution.begin(); it != dis_volume_solution.end();
@@ -3656,8 +2003,6 @@ namespace HP_ALE
         scratch.volume_fe_values.reinit(cell_volume);
         const unsigned int stokes_dofs_per_cell   = stokes_fe.dofs_per_cell;
         const unsigned int hydrogel_dofs_per_cell = hydrogel_fe.dofs_per_cell;
-        const unsigned int third_dofs_per_cell = third_fe.dofs_per_cell;
-
         const FEValues<dim> &fe_values =
                 scratch.hp_fe_values.get_present_fe_values();
         const FEValues<dim> &volume_fe_values =
@@ -3789,7 +2134,6 @@ namespace HP_ALE
                 }
 
                 // assemble local matrix
-
                 if (update_matrix)
                     for (unsigned int i = 0; i < dofs_per_cell; ++i)
                         for (unsigned int j = 0; j < dofs_per_cell; ++j)
@@ -3826,7 +2170,7 @@ namespace HP_ALE
             }         // q loop
         } // outer domain (fluid domain)
 
-        else if (cell_is_in_hydrogel_domain(cell_hp))/*(cell_is_in_hydrogel_domain)*/
+        else /*(cell_is_in_hydrogel_domain)*/
         {
             // pcout<<"assembling hydrogel domain...\n";
             // same as in the stokes domain
@@ -4305,105 +2649,6 @@ namespace HP_ALE
                     } // face loop
 
         } // hydrogel domain
-
-        else {
-            std::vector<Tensor<2, dim>> grad_u(n_q_points); // \nabla u
-            fe_values[extractor_displacement].get_function_gradients(
-                    current_solution, grad_u);
-
-            std::vector<Tensor<1, dim>> displacement_u(n_q_points),
-                    old_displacement_u(n_q_points);
-            fe_values[extractor_displacement].get_function_values(current_solution,
-                                                                  displacement_u);
-            fe_values[extractor_displacement].get_function_values(
-                    old_solution, old_displacement_u);
-
-            // get vs current solution, n step in Newton's method
-            std::vector<Tensor<1, dim>> vs(n_q_points);
-            fe_values[extractor_mesh_velocity].get_function_values(current_solution,
-                                                                   vs);
-            // grad vs(gradients of mesh displacement)
-            std::vector<Tensor<2, dim>> grad_vs(n_q_points);
-            fe_values[extractor_mesh_velocity].get_function_gradients(
-                    current_solution, grad_vs);
-
-            for (unsigned int q = 0; q < n_q_points; ++q)
-            {
-                for (unsigned int k = 0; k < dofs_per_cell; ++k)
-                {
-
-                    // Psi_vs and grad \Psi_vs
-                    shape_vs[k] = fe_values[extractor_mesh_velocity].value(k, q);
-                    shape_grad_vs[k] =
-                            fe_values[extractor_mesh_velocity].gradient(k, q);
-
-                    // Psi_u and grad \Psi_u
-                    shape_displacement[k] =
-                            fe_values[extractor_displacement].value(k, q);
-                    grad_shape_displacement[k] =
-                            fe_values[extractor_displacement].gradient(k, q);
-                    div_shape_displacement[k] =
-                            fe_values[extractor_displacement].divergence(k, q);
-                }
-                // compute F an J
-                Tensor<2, dim> deformation_F(identity_tensor);
-                deformation_F += grad_u[q]; // F
-                const double         jacoiban = determinant(deformation_F); // J
-                const auto           inv_F    = invert(deformation_F); // F inverse
-                const Tensor<2, dim> F_T = transpose(deformation_F); // F transpose
-                const Tensor<2, dim> inv_F_T = invert(F_T); // (F transpose) inverse
-                const Tensor<2, dim> grad_vsq = grad_vs[q]; // grad vs
-                // assemble local rhs
-                double tmp_rhs, tmp_mat;
-                for (unsigned int i = 0; i < dofs_per_cell; ++i)
-                {
-                    // Sigma^star F_hat_inv_transpose_star J_hat_star
-                    tmp_rhs = 0.;
-                    tmp_rhs += scalar_product(
-                            0.5 * mu_s * (deformation_F - inv_F_T) +
-                            0.5 * lambda_s * (jacoiban - 1) * jacoiban * inv_F_T,
-                            shape_grad_vs[i]) *
-                               static_cast<double>(
-                                       interface_dofs_flag
-                                       [copy_data.local_dof_indices[i]]) +
-                               ((displacement_u[q] - old_displacement_u[q]) / time_step -
-                                vs[q]) *
-                               shape_displacement[i] *
-                               static_cast<double>(
-                                       interface_dofs_flag
-                                       [copy_data.local_dof_indices[i]]) ; //
-                    // add other terms here using the format above
-                    // no need to change this, pay attention to the negative sign
-                    copy_data.cell_rhs(i) -= fe_values.JxW(q) * tmp_rhs;
-                }
-                // assemble local matrix
-                if (update_matrix)
-                    for (unsigned int i = 0; i < dofs_per_cell; ++i)
-                        for (unsigned int j = 0; j < dofs_per_cell; ++j)
-                        {
-                            const Tensor<2, dim> d_F = grad_shape_displacement[j];
-                            const Tensor<2, dim> d_inv_F_T= -inv_F_T*transpose(d_F)*inv_F_T;
-                            const double d_jacoiban = jacoiban * scalar_product(inv_F_T,d_F);
-                            tmp_mat = 0.;
-                            tmp_mat += scalar_product(
-                                    0.5 * mu_s * (d_F - d_inv_F_T) +
-                                    0.5 * lambda_s * ((2 * jacoiban - 1) * d_jacoiban * inv_F_T +
-                                                    (jacoiban-1) * jacoiban * d_inv_F_T),
-                                    shape_grad_vs[i]) *
-                                       static_cast<double>(
-                                               interface_dofs_flag
-                                               [copy_data.local_dof_indices[i]]) +
-                                       (shape_displacement[j] / time_step - shape_vs[j]) *
-                                       shape_displacement[i] *
-                                       static_cast<double>(
-                                               interface_dofs_flag
-                                               [copy_data.local_dof_indices[i]]);
-                            copy_data.cell_matrix(i, j) += fe_values.JxW(q) * tmp_mat;
-                        }
-            } // q loop
-        }
-
-
     }
 
     // constraints on interface terms matrix and rhs
@@ -4413,7 +2658,6 @@ namespace HP_ALE
             const PerTaskData &copy_data,
             const bool         update_matrix)
     {
-        //pcout << " copier " << std::endl;
         if (update_matrix)
         {
             constraints_newton_update.distribute_local_to_global(
@@ -4500,6 +2744,7 @@ namespace HP_ALE
     FluidStructureProblem<dim>::assemble_system_workstream(
             const bool update_matrix)
     {
+        TimerOutput::Scope timing_section(computing_timer, "assemble hp system");
         if (update_matrix)
             system_matrix = 0;
 
@@ -4510,7 +2755,6 @@ namespace HP_ALE
          const QGauss<dim> quadrature_formula(2 + 2 * velocity_degree);
         // same quadrature for all
         const hp::QCollection<dim> q_collection{quadrature_formula,
-                                                quadrature_formula,
                                                 quadrature_formula};
         const QGauss<dim - 1>      face_quadrature_formula(2 + 2 * velocity_degree);
 
@@ -4529,7 +2773,6 @@ namespace HP_ALE
                        mapping_collection,
                        stokes_fe,
                        hydrogel_fe,
-                       third_fe,
                        volume_fe,
                        q_collection,
                        q_collection,
@@ -4539,13 +2782,13 @@ namespace HP_ALE
                        face_update_flags);
         PerTaskData cp;
         auto worker =
-                [=, &update_matrix = std::as_const(update_matrix)](const typename DoFHandler<dim>::active_cell_iterator &cell,
+                [this, &update_matrix = std::as_const(update_matrix)](const typename DoFHandler<dim>::active_cell_iterator &cell,
                                                                       ScratchData &                                         scratch,
                                                                       PerTaskData &                                         copy_data) {
-                    local_assemble_hp(cell, scratch, copy_data, update_matrix);
+                    this->local_assemble_hp(cell, scratch, copy_data, update_matrix);
                 };
-        auto copier = [=, &update_matrix = std::as_const(update_matrix)](const PerTaskData &copy_data) {
-            copy_local_to_global_hp(copy_data, update_matrix);
+        auto copier = [this, &update_matrix = std::as_const(update_matrix)](const PerTaskData &copy_data) {
+                   this->copy_local_to_global_hp(copy_data, update_matrix);
         };
 
         WorkStream::run(CellFilter(IteratorFilters::LocallyOwnedCell(),
@@ -4558,7 +2801,6 @@ namespace HP_ALE
         system_rhs.compress(VectorOperation::add);
         //pcout << "Number of non-zero elements: " << system_matrix.n_nonzero_elements() << std::endl;
     }
-
 
     template <int dim>
     void
@@ -4581,6 +2823,12 @@ namespace HP_ALE
                                          update_values |
                                          update_gradients |
                                          update_quadrature_points);
+        hp::FEValues<dim>      volume_fe_values(mapping_collection,
+                                                volume_fe_collection,
+                                                q_collection,
+                                                update_values |
+                                                update_gradients |
+                                                update_quadrature_points);
 
         std::vector<bool> dof_is_touched(dof_handler.n_dofs(),
                                          false); // set to true if is computed
@@ -4595,13 +2843,22 @@ namespace HP_ALE
                             &triangulation, cell_hp->level(), cell_hp->index(), &volume_dof_handler);
 
                     fe_values.reinit(cell_hp);
+                    volume_fe_values.reinit(cell_volume);
+
                     const FEValues<dim> & hydrogel_fe_values = fe_values.get_present_fe_values();
+                    const FEValues<dim> & volume_fe_values = volume_fe_values.get_present_fe_values();
+
                     const unsigned int n_q_points =
                             hydrogel_fe_values.n_quadrature_points;
+
                     //get displacement values
                     std::vector<Tensor<1, dim>> displacement(n_q_points);
                     hydrogel_fe_values[extractor_displacement].get_function_values(
                             solution, displacement);
+                    //get grad u
+                    std::vector<Tensor<2, dim>> grad_u(n_q_points); // \nabla u
+                    hydrogel_fe_values[extractor_displacement].get_function_gradients(
+                            solution, grad_u);
                     //get vf values
                     std::vector<Tensor<1, dim>> vf(n_q_points);
                     hydrogel_fe_values[extractor_hydrogel_velocity].get_function_values(
@@ -4610,12 +2867,17 @@ namespace HP_ALE
                     std::vector<Tensor<2, dim>> grad_vf(n_q_points);
                     hydrogel_fe_values[extractor_hydrogel_velocity].get_function_gradients(
                             solution, grad_vf);
+                    //get interior pressure p_2
+                    std::vector<double> p2(n_q_points);
+                    hydrogel_fe_values[extractor_hydrogel_pressure].get_function_values(
+                            solution, p2);
+
+                    //get volume fraction
+                    /*std::vector<double> volume_s(n_q_points);
+                    volume_fe_values.get_function_values(volume_solution, volume_s);*/
+
                     //hydrogel domain
                     const auto &qpoints = hydrogel_fe_values.get_quadrature_points();
-
-                    std::vector<Tensor<2, dim>> grad_u(n_q_points); // \nabla u
-                    hydrogel_fe_values[extractor_displacement].get_function_gradients(
-                            solution, grad_u);
 
                     const unsigned int volume_dofs_per_cell =
                             cell_volume->get_fe().dofs_per_cell;
@@ -4650,35 +2912,76 @@ namespace HP_ALE
                                                               inv_F_T              ) *
                                                           transpose(deformation_F) ;
                         // almansi Strain 0.5(I- F^ -T * F^-1)
-                        Tensor<2, dim> strain_2d(identity_tensor) ;
+                        /*Tensor<2, dim> strain_2d(identity_tensor) ;
                         strain_2d -= inv_F_T * inv_F;
-                        strain_2d *= 0.5;
+                        strain_2d *= 0.5;*/
+
+                        //Green strain 0.5*(F^T - F - I)
+                        Tensor<2, dim> strain_2d(identity_tensor) ;
+                        strain_2d -=  transpose(deformation_F) * deformation_F;
+                        strain_2d *= -0.5;
+
                         Tensor<2, dim> fluid_stress_2d =
                                 vis_BM * (gradvf_Finv + gradvf_Finv_T);
+
+                        /*Tensor<2, dim> stress_total_2d =
+                                volume_s[q] * solid_stress_2d +
+                                (1.0 - volume_s[q]) * fluid_stress_2d -
+                                p2[q] * identity_tensor;*/
 
                         const unsigned int volume_global_id = volume_local_dof_indices[q];
                         if (!dof_is_touched[volume_global_id])
                         {
                             stress_s[0](volume_global_id) = solid_stress_2d[0][0];
                             stress_s[1](volume_global_id) = solid_stress_2d[1][1];
-                            stress_s[2](volume_global_id) = 0;
-                            stress_s[3](volume_global_id) = solid_stress_2d[0][1];
-                            stress_s[4](volume_global_id) = 0;
-                            stress_s[5](volume_global_id) = 0;
+                            stress_s[2](volume_global_id) = solid_stress_2d[0][1];
+                            stress_s[3](volume_global_id) = solid_stress_2d[0][0] +
+                                                            solid_stress_2d[1][1];
+                            stress_s[4](volume_global_id) = solid_stress_2d[0][0] *
+                                                            solid_stress_2d[1][1] - solid_stress_2d[0][1] *
+                                                                                    solid_stress_2d[0][1];
+                            stress_s[5](volume_global_id) = std::pow( (
+                                                                              std::pow((solid_stress_2d[0][0] + solid_stress_2d[1][1]), 2)
+                                                                              -3 * (solid_stress_2d[0][0] * solid_stress_2d[1][1]
+                                                                                    - solid_stress_2d[0][1] * solid_stress_2d[0][1]) ),  0.5);
 
                             stress_f[0](volume_global_id) = fluid_stress_2d[0][0];
                             stress_f[1](volume_global_id) = fluid_stress_2d[1][1];
-                            stress_f[2](volume_global_id) = 0;
-                            stress_f[3](volume_global_id) = fluid_stress_2d[0][1];
-                            stress_f[4](volume_global_id) = 0;
-                            stress_f[5](volume_global_id) = 0;
+                            stress_f[2](volume_global_id) = fluid_stress_2d[0][1];
+                            stress_f[3](volume_global_id) = fluid_stress_2d[0][0] +
+                                                            fluid_stress_2d[1][1];
+                            stress_f[4](volume_global_id) = fluid_stress_2d[0][0] *
+                                                            fluid_stress_2d[1][1] - fluid_stress_2d[0][1] *
+                                                                                    fluid_stress_2d[0][1];
+                            stress_f[5](volume_global_id) = std::pow( (
+                                                                              std::pow((fluid_stress_2d[0][0] + fluid_stress_2d[1][1]), 2)
+                                                                              -3 * (fluid_stress_2d[0][0] * fluid_stress_2d[1][1]
+                                                                                    - fluid_stress_2d[0][1] * fluid_stress_2d[0][1]) ),  0.5);
+
+                            /*stress_T[0](volume_global_id) = stress_total_2d[0][0];
+                            stress_T[1](volume_global_id) = stress_total_2d[1][1];
+                            stress_T[2](volume_global_id) = stress_total_2d[0][1];
+                            stress_T[3](volume_global_id) = stress_total_2d[0][0] +
+                                                              stress_total_2d[1][1];
+                            stress_T[4](volume_global_id) = stress_total_2d[0][0] *
+                                    stress_total_2d[1][1] - stress_total_2d[0][1] *
+                                    stress_total_2d[0][1];
+                            stress_T[5](volume_global_id) = std::pow( (
+                                    std::pow((stress_total_2d[0][0] + stress_total_2d[1][1]), 2)
+                                    -3 * (stress_total_2d[0][0] * stress_total_2d[1][1]
+                                    - stress_total_2d[0][1] * stress_total_2d[0][1]) ),  0.5);*/
 
                             strain[0](volume_global_id) = strain_2d[0][0];
                             strain[1](volume_global_id) = strain_2d[1][1];
-                            strain[2](volume_global_id) = 0;
-                            strain[3](volume_global_id) = strain_2d[0][1];
-                            strain[4](volume_global_id) = 0;
-                            strain[5](volume_global_id) = 0;
+                            strain[2](volume_global_id) = strain_2d[0][1];
+                            strain[3](volume_global_id) = strain_2d[0][0] + strain_2d[1][1];
+                            strain[4](volume_global_id) = strain_2d[0][0] *
+                                                          strain_2d[1][1] - strain_2d[0][1] *
+                                                                            strain_2d[0][1];
+                            strain[5](volume_global_id) = std::pow( (
+                                                                            std::pow((strain_2d[0][0] + strain_2d[1][1]), 2)
+                                                                            -3 * (strain_2d[0][0] * strain_2d[1][1]
+                                                                                  - strain_2d[0][1] * strain_2d[0][1]) ),  0.5);
 
                             dof_is_touched[volume_global_id] = true;
                         }
@@ -4694,6 +2997,7 @@ namespace HP_ALE
     void
     FluidStructureProblem<dim>::newton_iteration()
     {
+        TimerOutput::Scope timing_section(computing_timer, "newton iteration");
         pcout << " newton iteration... " << std::endl;
         // set the Newton iterate v* to v_n
         current_solution = old_solution;
@@ -4808,7 +3112,6 @@ namespace HP_ALE
                         alpha_final = alpha_2;
                         g_final = g2;
                     }
-
                 }
             }
 
@@ -4835,9 +3138,9 @@ namespace HP_ALE
     FluidStructureProblem<dim>::output_results(
             const unsigned int step_number) const
     {
-        // std::string filename = filename_base;
-        //   filename +="_quad";
-
+        //Timer timer;
+       // std::string filename = filename_base;
+     //   filename +="_quad";
         std::vector<std::string> solution_names(dim, "displacement");
         std::vector<DataComponentInterpretation::DataComponentInterpretation>
                 data_component_interpretation(
@@ -4945,6 +3248,12 @@ namespace HP_ALE
         std::ofstream output("solution-" +
                              Utilities::int_to_string(step_number, 5) + ".vtk");
         data_out.write_vtk(output);
+        /*data_out.write_vtu_with_pvtu_record(
+                "./", "solution", step_number,
+                MPI_COMM_WORLD, 5);*/
+
+             //timer.stop();
+        //std::cout << "done (" << timer.cpu_time() << "s)" << std::endl;
     }
 
     //3 kinds of constraints 1.interface flux  2.hp boundary 3.newton
@@ -4958,17 +3267,11 @@ namespace HP_ALE
         make_flux_constraints(constraints_flux);
         constraints_flux.close();
 
-        constraints_flux2.clear();
-        constraints_flux2.reinit(hp_relevant_set);
-        make_flux2_constraints(constraints_flux2);
-        constraints_flux2.close();
-
         constraints_hp.clear();
         constraints_hp.reinit(hp_relevant_set);
         constraints_hp.merge(constraints_hp_nonzero);
         constraints_hp.merge(constraints_flux,
                              AffineConstraints<double>::MergeConflictBehavior::left_object_wins);
-        constraints_hp.merge(constraints_flux2);
         constraints_hp.close();
 
         constraints_newton_update.clear();
@@ -4976,7 +3279,6 @@ namespace HP_ALE
         constraints_newton_update.merge(constraints_boundary);
         constraints_newton_update.merge(constraints_flux,
                                         AffineConstraints<double>::MergeConflictBehavior::left_object_wins);
-        constraints_newton_update.merge(constraints_flux2);
         constraints_newton_update.close();
     }
 
@@ -5020,10 +3322,10 @@ namespace HP_ALE
     void
     FluidStructureProblem<dim>::run()
     {
-        const unsigned int n_refinement = 0;
+        const unsigned int n_refinement = 1;
         make_grid(n_refinement);
         setup_dofs();
-        set_interface_dofs_flag(interface_dofs_flag);
+        set_interface_dofs_flag(interface_dofs_flag, hp_index_set);
         output_results(0);
 
         uint         step       = 0;
@@ -5065,8 +3367,10 @@ namespace HP_ALE
                 compute_cauchy_stress();
                 output_results(step);
             }
-
+            if ((timestep_number > 0) && (timestep_number % 4 == 0))
+                computing_timer.print_summary();
             time += time_step;
+            ++timestep_number;
         }
         while (time < final_time);
         myfile.close();
@@ -5078,10 +3382,11 @@ int main(int argc, char *argv[])
     try
     {
         using namespace HP_ALE;
-        Utilities::MPI::MPI_InitFinalize mpi_initialization(argc, argv, numbers::invalid_unsigned_int);
+        //dealii::MultithreadInfo::set_thread_limit(32);
+        Utilities::MPI::MPI_InitFinalize mpi_initialization(argc, argv,
+                                                            numbers::invalid_unsigned_int);
         //Utilities::MPI::MPI_InitFinalize mpi_initialization(argc, argv, 32);
-        const TestCase test_case = TestCase::case_6;
-
+        const TestCase test_case = TestCase::rigid;
         //pcout << "running " << enum_str[static_cast<int>(test_case)]
         //<< std::endl;
 

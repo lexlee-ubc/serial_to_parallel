@@ -23,6 +23,7 @@ SET(TARGET_SRC
 
 CMAKE_MINIMUM_REQUIRED(VERSION 2.8.12)
 
+
 FIND_PACKAGE(deal.II 9.3.0
   HINTS ${deal.II_DIR} ${DEAL_II_DIR} ../ ../../ $ENV{DEAL_II_DIR}
   )
@@ -36,4 +37,16 @@ ENDIF()
 
 DEAL_II_INITIALIZE_CACHED_VARIABLES()
 PROJECT(${TARGET})
+
 DEAL_II_INVOKE_AUTOPILOT()
+
+find_package(MPI REQUIRED)
+include_directories(${MPI_INCLUDE_PATH})
+
+set(CMAKE_CXX_COMPILER mpicxx) # 设置MPI编译器
+
+set(SOURCE_FILES v1.0.cpp)
+
+
+
+target_link_libraries(v1.0 ${MPI_LIBRARIES}) # 链接MPI库
