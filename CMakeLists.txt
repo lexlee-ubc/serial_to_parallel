@@ -40,13 +40,3 @@ PROJECT(${TARGET})
 
 DEAL_II_INVOKE_AUTOPILOT()
 
-find_package(MPI REQUIRED)
-include_directories(${MPI_INCLUDE_PATH})
-
-set(CMAKE_CXX_COMPILER mpicxx) # 设置MPI编译器
-
-set(SOURCE_FILES v1.0.cpp)
-
-
-
-target_link_libraries(v1.0 ${MPI_LIBRARIES}) # 链接MPI库

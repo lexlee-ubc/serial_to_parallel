@@ -1142,7 +1142,6 @@ InitialDisplacement<dim>::vector_value(const Point<dim> &point,
     FluidStructureProblem<dim>::setup_dofs()
     {
         TimerOutput::Scope timing_section(computing_timer, "setup_dofs");
-        GridTools::partition_triangulation(n_mpi_processes, triangulation);
         const unsigned int n_components_total = fe_collection.n_components();
         set_active_fe_indices();
         {
